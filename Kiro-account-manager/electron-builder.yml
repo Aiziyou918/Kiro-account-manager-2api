@@ -51,6 +51,10 @@ linux:
   category: Utility
 appImage:
   artifactName: ${name}-${version}.${ext}
+snap:
+  publish:
+    provider: generic
+    url: https://example.com/auto-updates
 npmRebuild: false
 publish:
   provider: generic
