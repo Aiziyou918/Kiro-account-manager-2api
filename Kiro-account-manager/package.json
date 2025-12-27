@@ -24,6 +24,8 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@anthropic-ai/tokenizer": "^0.0.4",
+    "axios": "^1.7.9",
     "electron-updater": "^6.3.9",
     "@tailwindcss/vite": "^4.1.17",
     "@tanstack/react-virtual": "^3.13.12",

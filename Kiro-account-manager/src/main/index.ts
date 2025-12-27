@@ -6,6 +6,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { writeFile, readFile } from 'fs/promises'
 import { encode, decode } from 'cbor-x'
 import icon from '../../resources/icon.png?asset'
+import { startKiroProxyServer } from './kiro/proxy-server'
 
 // ============ 自动更新配置 ============
 autoUpdater.autoDownload = false
@@ -76,6 +77,12 @@ interface OidcRefreshResult {
 
 // 社交登录 (GitHub/Google) 的 Token 刷新端点
 const KIRO_AUTH_ENDPOINT = 'https://prod.us-east-1.auth.desktop.kiro.dev'
+const KIRO_PROXY_PORT = Number(process.env.KIRO_PROXY_PORT || 3001)
+const KIRO_PROXY_API_KEY = process.env.KIRO_PROXY_API_KEY
+const KIRO_PROXY_COOLDOWN_MS = Number(process.env.KIRO_PROXY_COOLDOWN_MS || 5 * 60 * 1000)
+const KIRO_PROXY_REFRESH_BEFORE_EXPIRY_MS = Number(
+  process.env.KIRO_PROXY_REFRESH_BEFORE_EXPIRY_MS || 5 * 60 * 1000
+)
 
 // ============ 代理设置 ============
 
@@ -527,7 +534,114 @@ async function createBackup(data: unknown): Promise<void> {
   }
 }
 
+async function getStoredAccountData(): Promise<any | null> {
+  await initStore()
+  return store!.get('accountData', null) as any
+}
+
+async function updateAccountCredentialsInStore(
+  accountId: string,
+  updates: Partial<{
+    accessToken: string
+    refreshToken?: string
+    expiresAt: number
+  }>
+): Promise<void> {
+  await initStore()
+  const data = (store!.get('accountData', null) as any) || {}
+  if (!data.accounts || !data.accounts[accountId]) return
+  data.accounts[accountId] = {
+    ...data.accounts[accountId],
+    credentials: {
+      ...data.accounts[accountId].credentials,
+      ...updates
+    }
+  }
+  store!.set('accountData', data)
+  lastSavedData = data
+}
+
+async function refreshAccountTokenForProxy(account: any): Promise<{
+  accessToken: string
+  refreshToken?: string
+  expiresIn?: number
+}> {
+  const { refreshToken, clientId, clientSecret, region, authMethod } = account.credentials || {}
+
+  if (!refreshToken) {
+    throw new Error('Missing refreshToken')
+  }
+
+  if (authMethod !== 'social' && (!clientId || !clientSecret)) {
+    throw new Error('Missing OIDC clientId/clientSecret')
+  }
+
+  const result = await refreshTokenByMethod(
+    refreshToken,
+    clientId || '',
+    clientSecret || '',
+    region || 'us-east-1',
+    authMethod
+  )
+
+  if (!result.success || !result.accessToken) {
+    throw new Error(result.error || 'Token refresh failed')
+  }
+
+  return {
+    accessToken: result.accessToken,
+    refreshToken: result.refreshToken || refreshToken,
+    expiresIn: result.expiresIn ?? 3600
+  }
+}
+
+function normalizeProxyConfig(data: any): { enabled: boolean; port: number; apiKey?: string } {
+  const enabled = data?.apiProxyEnabled ?? true
+  const rawPort = Number(data?.apiProxyPort ?? KIRO_PROXY_PORT)
+  const port = Number.isFinite(rawPort) && rawPort > 0 && rawPort < 65536 ? rawPort : KIRO_PROXY_PORT
+  const apiKey = typeof data?.apiProxyApiKey === 'string' ? data.apiProxyApiKey.trim() : KIRO_PROXY_API_KEY
+  return { enabled: Boolean(enabled), port, apiKey: apiKey || undefined }
+}
+
+async function startOrRestartProxyServer(config: { enabled: boolean; port: number; apiKey?: string }) {
+  if (!config.enabled) {
+    if (kiroProxyServer) {
+      kiroProxyServer.close()
+      kiroProxyServer = null
+    }
+    currentProxyConfig = config
+    return
+  }
+
+  if (
+    currentProxyConfig &&
+    currentProxyConfig.enabled === config.enabled &&
+    currentProxyConfig.port === config.port &&
+    currentProxyConfig.apiKey === config.apiKey
+  ) {
+    return
+  }
+
+  if (kiroProxyServer) {
+    kiroProxyServer.close()
+    kiroProxyServer = null
+  }
+
+  kiroProxyServer = startKiroProxyServer({
+    port: config.port,
+    apiKey: config.apiKey,
+    cooldownMs: KIRO_PROXY_COOLDOWN_MS,
+    refreshBeforeExpiryMs: KIRO_PROXY_REFRESH_BEFORE_EXPIRY_MS,
+    getAccountData: getStoredAccountData,
+    refreshAccountToken: refreshAccountTokenForProxy,
+    updateAccountCredentials: updateAccountCredentialsInStore
+  })
+  currentProxyConfig = config
+}
+
 let mainWindow: BrowserWindow | null = null
+let kiroProxyServer: ReturnType<typeof startKiroProxyServer> | null = null
+let currentProxyConfig: { enabled: boolean; port: number; apiKey?: string } | null = null
 
 function createWindow(): void {
   // Create the browser window.
@@ -643,7 +757,7 @@ function handleProtocolUrl(url: string): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // 注册自定义协议
   registerProtocol()
 
@@ -2480,6 +2594,28 @@ app.whenReady().then(() => {
     }
   })
 
+  // IPC: 设置本地 API 代理服务
+  ipcMain.handle(
+    'set-api-proxy-config',
+    async (_event, config: { enabled: boolean; port: number; apiKey?: string }) => {
+      try {
+        const data = (await getStoredAccountData()) || {}
+        data.apiProxyEnabled = Boolean(config.enabled)
+        data.apiProxyPort = Number(config.port)
+        data.apiProxyApiKey = typeof config.apiKey === 'string' ? config.apiKey : ''
+        store!.set('accountData', data)
+        lastSavedData = data
+
+        const normalized = normalizeProxyConfig(data)
+        await startOrRestartProxyServer(normalized)
+        return { success: true }
+      } catch (error) {
+        console.error('[Proxy] Failed to update API proxy config:', error)
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
+      }
+    }
+  )
+
   // ============ Kiro 设置管理 IPC ============
 
   // IPC: 获取 Kiro 设置
@@ -3047,6 +3183,14 @@ app.whenReady().then(() => {
 
   createWindow()
 
+  try {
+    const accountData = await getStoredAccountData()
+    const config = normalizeProxyConfig(accountData)
+    await startOrRestartProxyServer(config)
+  } catch (error) {
+    console.error('[Proxy] Failed to start Kiro proxy server:', error)
+  }
+
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
@@ -3085,6 +3229,10 @@ app.on('open-url', (_event, url) => {
 // explicitly with Cmd + Q.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    if (kiroProxyServer) {
+      kiroProxyServer.close()
+      kiroProxyServer = null
+    }
     app.quit()
   }
 })

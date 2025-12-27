@@ -67,6 +67,9 @@ interface AccountsState {
   // 代理设置
   proxyEnabled: boolean
   proxyUrl: string // 格式: http://host:port 或 socks5://host:port
+  apiProxyEnabled: boolean
+  apiProxyPort: number
+  apiProxyApiKey: string
 
   // 自动换号设置
   autoSwitchEnabled: boolean
@@ -169,6 +172,7 @@ interface AccountsActions {
 
   // 代理设置
   setProxy: (enabled: boolean, url?: string) => void
+  setApiProxyConfig: (enabled: boolean, port: number, apiKey?: string) => void
 
   // 主题设置
   setTheme: (theme: string) => void
@@ -239,6 +243,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
   privacyMode: false,
   proxyEnabled: false,
   proxyUrl: '',
+  apiProxyEnabled: true,
+  apiProxyPort: 3001,
+  apiProxyApiKey: '',
   autoSwitchEnabled: false,
   autoSwitchThreshold: 0,
   autoSwitchInterval: 5,
@@ -1313,6 +1320,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
           privacyMode: data.privacyMode ?? false,
           proxyEnabled: data.proxyEnabled ?? false,
           proxyUrl: data.proxyUrl ?? '',
+          apiProxyEnabled: data.apiProxyEnabled ?? true,
+          apiProxyPort: data.apiProxyPort ?? 3001,
+          apiProxyApiKey: data.apiProxyApiKey ?? '',
           autoSwitchEnabled: data.autoSwitchEnabled ?? false,
           autoSwitchThreshold: data.autoSwitchThreshold ?? 0,
           autoSwitchInterval: data.autoSwitchInterval ?? 5,
@@ -1363,6 +1373,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
       privacyMode,
       proxyEnabled,
       proxyUrl,
+      apiProxyEnabled,
+      apiProxyPort,
+      apiProxyApiKey,
       autoSwitchEnabled,
       autoSwitchThreshold,
       autoSwitchInterval,
@@ -1388,6 +1401,9 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
         privacyMode,
         proxyEnabled,
         proxyUrl,
+        apiProxyEnabled,
+        apiProxyPort,
+        apiProxyApiKey,
         autoSwitchEnabled,
         autoSwitchThreshold,
         autoSwitchInterval,
@@ -1463,6 +1479,16 @@ export const useAccountsStore = create<AccountsStore>()((set, get) => ({
     get().saveToStorage()
     // 通知主进程更新代理设置
     window.api.setProxy?.(enabled, url ?? get().proxyUrl)
+  },
+
+  setApiProxyConfig: (enabled, port, apiKey) => {
+    set({
+      apiProxyEnabled: enabled,
+      apiProxyPort: port,
+      apiProxyApiKey: apiKey ?? get().apiProxyApiKey
+    })
+    get().saveToStorage()
+    window.api.setApiProxyConfig?.({ enabled, port, apiKey: apiKey ?? get().apiProxyApiKey })
   },
 
   // ==================== 主题设置 ====================

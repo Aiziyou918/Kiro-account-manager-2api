@@ -12,6 +12,9 @@ interface AccountData {
   privacyMode?: boolean
   proxyEnabled?: boolean
   proxyUrl?: string
+  apiProxyEnabled?: boolean
+  apiProxyPort?: number
+  apiProxyApiKey?: string
   autoSwitchEnabled?: boolean
   autoSwitchThreshold?: number
   autoSwitchInterval?: number
@@ -352,6 +355,7 @@ interface KiroApi {
 
   // 代理设置
   setProxy: (enabled: boolean, url: string) => Promise<{ success: boolean; error?: string }>
+  setApiProxyConfig: (config: { enabled: boolean; port: number; apiKey?: string }) => Promise<{ success: boolean; error?: string }>
 
   // ============ 机器码管理 API ============
 

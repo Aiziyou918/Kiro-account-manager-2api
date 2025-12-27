@@ -303,6 +303,11 @@ const api = {
     return ipcRenderer.invoke('set-proxy', enabled, url)
   },
 
+  // 本地 API 代理配置
+  setApiProxyConfig: (config: { enabled: boolean; port: number; apiKey?: string }): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('set-api-proxy-config', config)
+  },
+
   // ============ 机器码管理 API ============
 
   // 获取操作系统类型

@@ -66,6 +66,10 @@ export function SettingsPage() {
     proxyEnabled,
     proxyUrl,
     setProxy,
+    apiProxyEnabled,
+    apiProxyPort,
+    apiProxyApiKey,
+    setApiProxyConfig,
     autoSwitchEnabled,
     autoSwitchThreshold,
     autoSwitchInterval,
@@ -83,6 +87,8 @@ export function SettingsPage() {
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [isImporting, setIsImporting] = useState(false)
   const [tempProxyUrl, setTempProxyUrl] = useState(proxyUrl)
+  const [tempApiProxyPort, setTempApiProxyPort] = useState(apiProxyPort)
+  const [tempApiProxyApiKey, setTempApiProxyApiKey] = useState(apiProxyApiKey)
   const [themeExpanded, setThemeExpanded] = useState(false)
 
   const handleExport = () => {
@@ -367,6 +373,79 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
+      {/* 本地 API 代理 */}
+      <Card className="border-0 shadow-sm hover:shadow-md transition-shadow duration-200">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-primary/10">
+              <Layers className="h-4 w-4 text-primary" />
+            </div>
+            本地 API 代理
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="font-medium">启用本地代理服务</p>
+              <p className="text-sm text-muted-foreground">提供 OpenAI/Claude 兼容接口</p>
+            </div>
+            <Button
+              variant={apiProxyEnabled ? "default" : "outline"}
+              size="sm"
+              onClick={() => setApiProxyConfig(!apiProxyEnabled, tempApiProxyPort, tempApiProxyApiKey)}
+            >
+              {apiProxyEnabled ? '已开启' : '已关闭'}
+            </Button>
+          </div>
+
+          <div className="space-y-2 pt-2 border-t">
+            <label className="text-sm font-medium">代理端口</label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                className="w-32 h-9 px-3 rounded-lg border bg-background text-sm text-center focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                value={tempApiProxyPort}
+                min={1}
+                max={65535}
+                onChange={(e) => setTempApiProxyPort(parseInt(e.target.value) || 3001)}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setApiProxyConfig(apiProxyEnabled, tempApiProxyPort, tempApiProxyApiKey)}
+              >
+                保存
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              访问地址: http://127.0.0.1:{tempApiProxyPort}
+            </p>
+          </div>
+
+          <div className="space-y-2 pt-2 border-t">
+            <label className="text-sm font-medium">API Key (可选)</label>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                className="flex-1 h-9 px-3 rounded-lg border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+                placeholder="留空表示不启用鉴权"
+                value={tempApiProxyApiKey}
+                onChange={(e) => setTempApiProxyApiKey(e.target.value)}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setApiProxyConfig(apiProxyEnabled, tempApiProxyPort, tempApiProxyApiKey)}
+              >
+                保存
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              支持 Authorization: Bearer 或 x-api-key
+            </p>
+          </div>
+        </CardContent>
+      </Card>
       {/* 自动换号设置 */}
       <Card className="border-0 shadow-sm hover:shadow-md transition-shadow duration-200">
         <CardHeader className="pb-2">
@@ -377,7 +456,9 @@ export function SettingsPage() {
             自动换号
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
+  
+
+      <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">启用自动换号</p>
