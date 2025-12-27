@@ -7,6 +7,7 @@ Manage Kiro accounts and expose a local, OpenAI/Claude-compatible proxy API with
 - Round-robin account pool with cooldown on failures and automatic recovery
 - UI configuration for proxy port and API key
 - Uses existing account store and auto-refresh logic
+- Lightweight web admin at `/admin` for remote management
 
 ## Quick Start
 1. Run the app.
@@ -19,3 +20,7 @@ curl http://127.0.0.1:3001/v1/chat/completions \
   -H "Authorization: Bearer <API_KEY>" \
   -d '{"model":"claude-opus-4-5","messages":[{"role":"user","content":"Hello"}],"stream":false}'
 ```
+
+## Web Admin
+- Open `http://<server-ip>:<port>/admin`
+- Manage accounts, proxy config, and import OIDC credentials (two JSON files)

@@ -7,6 +7,7 @@ import { writeFile, readFile } from 'fs/promises'
 import { encode, decode } from 'cbor-x'
 import icon from '../../resources/icon.png?asset'
 import { startKiroProxyServer } from './kiro/proxy-server'
+import { randomUUID } from 'crypto'
 
 // ============ 自动更新配置 ============
 autoUpdater.autoDownload = false
@@ -539,6 +540,25 @@ async function getStoredAccountData(): Promise<any | null> {
   return store!.get('accountData', null) as any
 }
 
+async function getAdminDataSnapshot() {
+  const data = (await getStoredAccountData()) || {}
+  const accountsObj = data.accounts || {}
+  const accounts = Object.values(accountsObj).map((acc: any) => ({
+    id: acc.id,
+    email: acc.email,
+    status: acc.status
+  }))
+  const proxy = normalizeProxyConfig(data)
+  return {
+    accounts,
+    proxy: {
+      enabled: proxy.enabled,
+      port: proxy.port,
+      apiKeySet: Boolean(proxy.apiKey)
+    }
+  }
+}
+
 async function updateAccountCredentialsInStore(
   accountId: string,
   updates: Partial<{
@@ -595,6 +615,136 @@ async function refreshAccountTokenForProxy(account: any): Promise<{
   }
 }
 
+function buildUsageFromResponse(rawUsage: any) {
+  const creditUsage = rawUsage?.usageBreakdownList?.find(
+    (b: any) => b.resourceType === 'CREDIT' || b.displayName === 'Credits'
+  )
+  const baseCurrent = creditUsage?.currentUsage ?? 0
+  const baseLimit = creditUsage?.usageLimit ?? 0
+  let freeTrialCurrent = 0
+  let freeTrialLimit = 0
+  let freeTrialExpiry: string | undefined
+  if (creditUsage?.freeTrialInfo?.freeTrialStatus === 'ACTIVE') {
+    freeTrialLimit = creditUsage.freeTrialInfo.usageLimit ?? 0
+    freeTrialCurrent = creditUsage.freeTrialInfo.currentUsage ?? 0
+    freeTrialExpiry = creditUsage.freeTrialInfo.freeTrialExpiry
+  }
+  const current = baseCurrent + freeTrialCurrent
+  const limit = baseLimit + freeTrialLimit
+  return {
+    current,
+    limit,
+    percentUsed: limit > 0 ? current / limit : 0,
+    lastUpdated: Date.now(),
+    baseLimit,
+    baseCurrent,
+    freeTrialLimit,
+    freeTrialCurrent,
+    freeTrialExpiry,
+    nextResetDate: rawUsage?.nextDateReset
+  }
+}
+
+async function addAccountFromOidcFiles(
+  tokenFile: Record<string, unknown>,
+  clientFile: Record<string, unknown>
+) {
+  const refreshToken = (tokenFile.refreshToken as string) || (tokenFile.refresh_token as string)
+  const accessTokenFromFile = (tokenFile.accessToken as string) || (tokenFile.access_token as string)
+  const expiresAtRaw = (tokenFile.expiresAt as string) || (tokenFile.expires_at as string)
+  const clientId = (clientFile.clientId as string) || (clientFile.client_id as string)
+  const clientSecret = (clientFile.clientSecret as string) || (clientFile.client_secret as string)
+  const region =
+    (tokenFile.region as string) || (clientFile.region as string) || 'us-east-1'
+
+  if (!refreshToken || !clientId || !clientSecret) {
+    throw new Error('Missing refreshToken/clientId/clientSecret')
+  }
+
+  let accessToken = accessTokenFromFile
+  let expiresAtMs = expiresAtRaw ? Date.parse(expiresAtRaw) : NaN
+  if (!accessToken || !Number.isFinite(expiresAtMs)) {
+    const refreshed = await refreshTokenByMethod(refreshToken, clientId, clientSecret, region, 'IdC')
+    if (!refreshed.success || !refreshed.accessToken) {
+      throw new Error(refreshed.error || 'Token refresh failed')
+    }
+    accessToken = refreshed.accessToken
+    expiresAtMs = Date.now() + (refreshed.expiresIn ?? 3600) * 1000
+  }
+
+  const now = Date.now()
+  const userInfo = await getUserInfo(accessToken).catch(() => ({} as any))
+  const usageRaw = await kiroApiRequest<any>(
+    'GetUserUsageAndLimits',
+    { isEmailRequired: true, origin: 'KIRO_IDE' },
+    accessToken
+  ).catch(() => null)
+  const subscriptionRaw = await kiroApiRequest<any>('GetSubscription', {}, accessToken).catch(
+    () => null
+  )
+
+  const email = userInfo?.email || 'unknown'
+  const subscriptionTitle = subscriptionRaw?.subscriptionTitle || usageRaw?.subscriptionInfo?.subscriptionTitle
+  let subscriptionType = 'Free'
+  if (typeof subscriptionTitle === 'string') {
+    if (subscriptionTitle.toUpperCase().includes('PRO')) subscriptionType = 'Pro'
+    else if (subscriptionTitle.toUpperCase().includes('ENTERPRISE')) subscriptionType = 'Enterprise'
+    else if (subscriptionTitle.toUpperCase().includes('TEAMS')) subscriptionType = 'Teams'
+  }
+
+  const account = {
+    id: `${email}-${randomUUID()}`,
+    email,
+    idp: 'BuilderId',
+    userId: userInfo?.userId,
+    credentials: {
+      accessToken,
+      csrfToken: '',
+      refreshToken,
+      clientId,
+      clientSecret,
+      region,
+      expiresAt: Number.isFinite(expiresAtMs) ? expiresAtMs : now + 3600 * 1000,
+      authMethod: 'IdC',
+      provider: 'BuilderId'
+    },
+    subscription: {
+      type: subscriptionType,
+      title: subscriptionTitle
+    },
+    usage: usageRaw ? buildUsageFromResponse(usageRaw) : {
+      current: 0,
+      limit: 0,
+      percentUsed: 0,
+      lastUpdated: now
+    },
+    tags: [],
+    status: 'active',
+    createdAt: now,
+    lastUsedAt: now,
+    isActive: false
+  }
+
+  await initStore()
+  const data = (store!.get('accountData', null) as any) || {}
+  data.accounts = data.accounts || {}
+  data.accounts[account.id] = account
+  store!.set('accountData', data)
+  lastSavedData = data
+
+  return { id: account.id, email: account.email }
+}
+
+async function deleteAccountById(id: string) {
+  await initStore()
+  const data = (store!.get('accountData', null) as any) || {}
+  if (data.accounts && data.accounts[id]) {
+    delete data.accounts[id]
+    store!.set('accountData', data)
+    lastSavedData = data
+  }
+}
+
 function normalizeProxyConfig(data: any): { enabled: boolean; port: number; apiKey?: string } {
   const enabled = data?.apiProxyEnabled ?? true
   const rawPort = Number(data?.apiProxyPort ?? KIRO_PROXY_PORT)
@@ -634,9 +784,24 @@ async function startOrRestartProxyServer(config: { enabled: boolean; port: numbe
     refreshBeforeExpiryMs: KIRO_PROXY_REFRESH_BEFORE_EXPIRY_MS,
     getAccountData: getStoredAccountData,
     refreshAccountToken: refreshAccountTokenForProxy,
-    updateAccountCredentials: updateAccountCredentialsInStore
+    updateAccountCredentials: updateAccountCredentialsInStore,
+    getAdminData: getAdminDataSnapshot,
+    setProxyConfig: setProxyConfigFromAdmin,
+    addAccountFromOidcFiles: addAccountFromOidcFiles,
+    deleteAccount: deleteAccountById
   })
   currentProxyConfig = config
+}
+
+async function setProxyConfigFromAdmin(config: { enabled: boolean; port: number; apiKey?: string }) {
+  const data = (await getStoredAccountData()) || {}
+  data.apiProxyEnabled = Boolean(config.enabled)
+  data.apiProxyPort = Number(config.port)
+  data.apiProxyApiKey = typeof config.apiKey === 'string' ? config.apiKey : ''
+  store!.set('accountData', data)
+  lastSavedData = data
+  const normalized = normalizeProxyConfig(data)
+  await startOrRestartProxyServer(normalized)
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -2599,15 +2764,7 @@ app.whenReady().then(async () => {
     'set-api-proxy-config',
     async (_event, config: { enabled: boolean; port: number; apiKey?: string }) => {
       try {
-        const data = (await getStoredAccountData()) || {}
-        data.apiProxyEnabled = Boolean(config.enabled)
-        data.apiProxyPort = Number(config.port)
-        data.apiProxyApiKey = typeof config.apiKey === 'string' ? config.apiKey : ''
-        store!.set('accountData', data)
-        lastSavedData = data
-
-        const normalized = normalizeProxyConfig(data)
-        await startOrRestartProxyServer(normalized)
+        await setProxyConfigFromAdmin(config)
         return { success: true }
       } catch (error) {
         console.error('[Proxy] Failed to update API proxy config:', error)
