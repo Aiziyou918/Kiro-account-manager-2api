@@ -976,6 +976,195 @@ ${firstUserContent}`,
     return this.buildClaudeResponse(responseText, false, 'assistant', model, toolCalls, inputTokens)
   }
 
+
+
+  parseAwsEventStreamBuffer(buffer: string) {
+    const events: Array<{ type: string; data?: any }> = []
+    let remaining = buffer
+    let searchStart = 0
+
+    while (true) {
+      const contentStart = remaining.indexOf('{"content":', searchStart)
+      const nameStart = remaining.indexOf('{"name":', searchStart)
+      const followupStart = remaining.indexOf('{"followupPrompt":', searchStart)
+      const inputStart = remaining.indexOf('{"input":', searchStart)
+      const stopStart = remaining.indexOf('{"stop":', searchStart)
+
+      const candidates = [contentStart, nameStart, followupStart, inputStart, stopStart].filter((pos) => pos >= 0)
+      if (candidates.length === 0) break
+
+      const jsonStart = Math.min(...candidates)
+      if (jsonStart < 0) break
+
+      let braceCount = 0
+      let jsonEnd = -1
+      let inString = false
+      let escapeNext = false
+
+      for (let i = jsonStart; i < remaining.length; i++) {
+        const char = remaining[i]
+
+        if (escapeNext) {
+          escapeNext = false
+          continue
+        }
+
+        if (char === '\\') {
+          escapeNext = true
+          continue
+        }
+
+        if (char === '"') {
+          inString = !inString
+          continue
+        }
+
+        if (!inString) {
+          if (char === '{') {
+            braceCount++
+          } else if (char === '}') {
+            braceCount--
+            if (braceCount === 0) {
+              jsonEnd = i
+              break
+            }
+          }
+        }
+      }
+
+      if (jsonEnd < 0) {
+        remaining = remaining.substring(jsonStart)
+        break
+      }
+
+      const jsonStr = remaining.substring(jsonStart, jsonEnd + 1)
+      try {
+        const parsed = JSON.parse(jsonStr)
+        if (parsed.content !== undefined && !parsed.followupPrompt) {
+          events.push({ type: 'content', data: parsed.content })
+        } else if (parsed.name && parsed.toolUseId) {
+          events.push({
+            type: 'toolUse',
+            data: {
+              name: parsed.name,
+              toolUseId: parsed.toolUseId,
+              input: parsed.input || '',
+              stop: parsed.stop || false
+            }
+          })
+        } else if (parsed.input !== undefined && !parsed.name) {
+          events.push({
+            type: 'toolUseInput',
+            data: {
+              input: parsed.input
+            }
+          })
+        } else if (parsed.stop !== undefined) {
+          events.push({
+            type: 'toolUseStop',
+            data: {
+              stop: parsed.stop
+            }
+          })
+        }
+      } catch {
+        // ignore parse errors
+      }
+
+      searchStart = jsonEnd + 1
+      if (searchStart >= remaining.length) {
+        remaining = ''
+        break
+      }
+    }
+
+    if (searchStart > 0 && remaining.length > 0) {
+      remaining = remaining.substring(searchStart)
+    }
+
+    return { events, remaining }
+  }
+
+  async *streamApiReal(method: string, model: string, body: any, isRetry = false, retryCount = 0) {
+    if (!this.isInitialized) await this.initialize()
+    const maxRetries = this.config.REQUEST_MAX_RETRIES || 3
+    const baseDelay = this.config.REQUEST_BASE_DELAY || 1000
+
+    const requestData = this.buildCodewhispererRequest(body.messages, model, body.tools, body.system)
+
+    const token = this.accessToken
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'amz-sdk-invocation-id': uuidv4()
+    }
+
+    const requestUrl = model.startsWith('amazonq') ? this.amazonQUrl : this.baseUrl
+
+    let stream: any = null
+    try {
+      const response = await (this.axiosInstance as ReturnType<typeof axios.create>).request({
+        method,
+        url: requestUrl,
+        data: requestData,
+        headers,
+        responseType: 'stream'
+      })
+
+      stream = response.data
+      let buffer = ''
+      let lastContentEvent: string | null = null
+
+      for await (const chunk of stream) {
+        buffer += chunk.toString()
+
+        const { events, remaining } = this.parseAwsEventStreamBuffer(buffer)
+        buffer = remaining
+
+        for (const event of events) {
+          if (event.type === 'content' && event.data) {
+            if (lastContentEvent === event.data) {
+              continue
+            }
+            lastContentEvent = event.data
+            yield { type: 'content', content: event.data }
+          } else if (event.type === 'toolUse') {
+            yield { type: 'toolUse', toolUse: event.data }
+          } else if (event.type === 'toolUseInput') {
+            yield { type: 'toolUseInput', input: event.data?.input }
+          } else if (event.type === 'toolUseStop') {
+            yield { type: 'toolUseStop', stop: event.data?.stop }
+          }
+        }
+      }
+    } catch (error: any) {
+      if (stream && typeof stream.destroy === 'function') {
+        stream.destroy()
+      }
+
+      if (error.response?.status === 403 && !isRetry) {
+        console.log('[Kiro] Received 403 in stream. Attempting token refresh and retrying...')
+        await this.initializeAuth(true)
+        yield* this.streamApiReal(method, model, body, true, retryCount)
+        return
+      }
+
+      if (error.response?.status === 429 && retryCount < maxRetries) {
+        const delay = baseDelay * Math.pow(2, retryCount)
+        console.log(`[Kiro] Received 429 in stream. Retrying in ${delay}ms...`)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        yield* this.streamApiReal(method, model, body, isRetry, retryCount + 1)
+        return
+      }
+
+      console.error('[Kiro] Stream API call failed:', error.message)
+      throw error
+    } finally {
+      if (stream && typeof stream.destroy === 'function') {
+        stream.destroy()
+      }
+    }
+  }
+
   async *generateContentStream(model: string, requestBody: any) {
     if (!this.isInitialized) await this.initialize()
     if (!this.disableAutoRefresh && this.isExpiryDateNear()) {
@@ -983,12 +1172,8 @@ ${firstUserContent}`,
     }
 
     const finalModel = MODEL_MAPPING[model] ? model : this.modelName
-    const response = await this.callApi('POST', finalModel, requestBody)
-    const { responseText, toolCalls } = this._processApiResponse(response)
     const inputTokens = this.estimateInputTokens(requestBody)
     const messageId = uuidv4()
-    const content = responseText
-    const contentTokens = this.countTextTokens(content)
 
     yield {
       type: 'message_start',
@@ -997,54 +1182,142 @@ ${firstUserContent}`,
         type: 'message',
         role: 'assistant',
         model: model,
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: inputTokens,
-          output_tokens: 0
-        }
+        usage: { input_tokens: inputTokens, output_tokens: 0 },
+        content: []
       }
     }
 
     yield {
       type: 'content_block_start',
       index: 0,
-      content_block: {
-        type: 'text',
-        text: ''
+      content_block: { type: 'text', text: '' }
+    }
+
+    let totalContent = ''
+    const toolCalls: Array<{ toolUseId: string; name: string; input: any }> = []
+    let currentToolCall: { toolUseId: string; name: string; input: string } | null = null
+
+    for await (const event of this.streamApiReal('POST', finalModel, requestBody)) {
+      if (event.type === 'content' && event.content) {
+        totalContent += event.content
+        yield {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: event.content }
+        }
+      } else if (event.type === 'toolUse') {
+        const tc = event.toolUse
+        if (tc?.name && tc?.toolUseId) {
+          if (currentToolCall && currentToolCall.toolUseId === tc.toolUseId) {
+            currentToolCall.input += tc.input || ''
+          } else {
+            if (currentToolCall) {
+              try {
+                currentToolCall.input = JSON.parse(currentToolCall.input)
+              } catch {
+                // keep raw input
+              }
+              toolCalls.push(currentToolCall as any)
+            }
+            currentToolCall = {
+              toolUseId: tc.toolUseId,
+              name: tc.name,
+              input: tc.input || ''
+            }
+          }
+          if (tc.stop) {
+            try {
+              currentToolCall.input = JSON.parse(currentToolCall.input)
+            } catch {
+              // keep raw input
+            }
+            toolCalls.push(currentToolCall as any)
+            currentToolCall = null
+          }
+        }
+      } else if (event.type === 'toolUseInput') {
+        if (currentToolCall) {
+          currentToolCall.input += event.input || ''
+        }
+      } else if (event.type === 'toolUseStop') {
+        if (currentToolCall && event.stop) {
+          try {
+            currentToolCall.input = JSON.parse(currentToolCall.input)
+          } catch {
+            // keep raw input
+          }
+          toolCalls.push(currentToolCall as any)
+          currentToolCall = null
+        }
       }
     }
 
-    yield {
-      type: 'content_block_delta',
-      index: 0,
-      delta: {
-        type: 'text_delta',
-        text: content
+    if (currentToolCall) {
+      try {
+        currentToolCall.input = JSON.parse(currentToolCall.input)
+      } catch {
+        // keep raw input
+      }
+      toolCalls.push(currentToolCall as any)
+      currentToolCall = null
+    }
+
+    const bracketToolCalls = parseBracketToolCalls(totalContent)
+    if (bracketToolCalls && bracketToolCalls.length > 0) {
+      for (const btc of bracketToolCalls) {
+        toolCalls.push({
+          toolUseId: btc.id || `tool_${uuidv4()}`,
+          name: btc.function.name,
+          input: JSON.parse(btc.function.arguments || '{}')
+        })
       }
     }
 
-    yield {
-      type: 'content_block_stop',
-      index: 0
+    yield { type: 'content_block_stop', index: 0 }
+
+    if (toolCalls.length > 0) {
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i]
+        const blockIndex = i + 1
+
+        yield {
+          type: 'content_block_start',
+          index: blockIndex,
+          content_block: {
+            type: 'tool_use',
+            id: tc.toolUseId || `tool_${uuidv4()}`,
+            name: tc.name,
+            input: {}
+          }
+        }
+
+        yield {
+          type: 'content_block_delta',
+          index: blockIndex,
+          delta: {
+            type: 'input_json_delta',
+            partial_json: typeof tc.input === 'string' ? tc.input : JSON.stringify(tc.input || {})
+          }
+        }
+
+        yield { type: 'content_block_stop', index: blockIndex }
+      }
+    }
+
+    let outputTokens = this.countTextTokens(totalContent)
+    for (const tc of toolCalls) {
+      outputTokens += this.countTextTokens(JSON.stringify(tc.input || {}))
     }
 
     yield {
       type: 'message_delta',
-      delta: {
-        stop_reason: 'end_turn',
-        stop_sequence: null
-      },
-      usage: {
-        output_tokens: contentTokens
-      }
+      delta: { stop_reason: toolCalls.length > 0 ? 'tool_use' : 'end_turn' },
+      usage: { output_tokens: outputTokens }
     }
 
-    yield {
-      type: 'message_stop'
-    }
+    yield { type: 'message_stop' }
   }
+
 
   buildClaudeResponse(
     content: string,

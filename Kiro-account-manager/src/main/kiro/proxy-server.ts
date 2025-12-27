@@ -106,6 +106,28 @@ function claudeToOpenAIResponse(claudeMessage: any) {
   }
 }
 
+function buildOpenAIStreamChunk(
+  id: string,
+  model: string,
+  created: number,
+  delta: Record<string, unknown>,
+  finishReason: string | null
+) {
+  return {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta,
+        finish_reason: finishReason
+      }
+    ]
+  }
+}
+
 function isTokenNearExpiry(expiresAt: number, refreshBeforeExpiryMs: number) {
   return expiresAt && Date.now() + refreshBeforeExpiryMs >= expiresAt
 }
@@ -1092,15 +1114,63 @@ export function startKiroProxyServer(options: ProxyOptions) {
             return
           }
 
-          const claudeMessage = await kiroService.generateContent(model, requestBody)
-          const openai = claudeToOpenAIResponse(claudeMessage)
           res.writeHead(200, {
             ...DEFAULT_HEADERS,
             'content-type': 'text/event-stream',
             'cache-control': 'no-cache',
             connection: 'keep-alive'
           })
-          res.write(`data: ${JSON.stringify(openai)}\n\n`)
+          const created = Math.floor(Date.now() / 1000)
+          let openaiId = `chatcmpl_${Date.now()}`
+          let roleSent = false
+
+          for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
+            if (!chunk) continue
+            if (chunk.type === 'message_start') {
+              openaiId = chunk?.message?.id || openaiId
+              if (!roleSent) {
+                res.write(
+                  `data: ${JSON.stringify(
+                    buildOpenAIStreamChunk(openaiId, model, created, { role: 'assistant' }, null)
+                  )}\n\n`
+                )
+                roleSent = true
+              }
+              continue
+            }
+
+            if (chunk.type === 'content_block_delta') {
+              const text = chunk?.delta?.text
+              if (text) {
+                if (!roleSent) {
+                  res.write(
+                    `data: ${JSON.stringify(
+                      buildOpenAIStreamChunk(openaiId, model, created, { role: 'assistant' }, null)
+                    )}\n\n`
+                  )
+                  roleSent = true
+                }
+                res.write(
+                  `data: ${JSON.stringify(
+                    buildOpenAIStreamChunk(openaiId, model, created, { content: text }, null)
+                  )}\n\n`
+                )
+              }
+              continue
+            }
+
+            if (chunk.type === 'message_delta') {
+              const hasStop = Boolean(chunk?.delta?.stop_reason)
+              if (hasStop) {
+                res.write(
+                  `data: ${JSON.stringify(
+                    buildOpenAIStreamChunk(openaiId, model, created, {}, 'stop')
+                  )}\n\n`
+                )
+              }
+            }
+          }
+
           res.write('data: [DONE]\n\n')
           res.end()
           return
