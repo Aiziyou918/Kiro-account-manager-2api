@@ -165,131 +165,719 @@ function parseMultipart(body: Buffer, boundary: string) {
 
 function renderAdminPage() {
   return `<!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kiro Account Manager - Admin</title>
+    <title>Kiro Admin Portal</title>
     <style>
-      body { font-family: Arial, sans-serif; margin: 24px; background: #0b0f14; color: #e6edf3; }
-      h1 { margin: 0 0 16px; }
-      .card { background: #111826; border: 1px solid #1f2937; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-      label { display: block; margin: 8px 0 4px; }
-      input, button { padding: 8px; border-radius: 6px; border: 1px solid #374151; background: #0f172a; color: #e6edf3; }
-      button { cursor: pointer; }
-      table { width: 100%; border-collapse: collapse; margin-top: 8px; }
-      th, td { text-align: left; padding: 8px; border-bottom: 1px solid #1f2937; }
-      .row { display: flex; gap: 12px; flex-wrap: wrap; }
-      .row > div { flex: 1 1 220px; }
-      .muted { color: #9ca3af; font-size: 12px; }
+      :root {
+        --bg: #ffffff;
+        --surface: #ffffff;
+        --surface-2: #f8fafc;
+        --text: #0f172a;
+        --text-secondary: #64748b;
+        --border: #e2e8f0;
+        --primary: #4f46e5;
+        --primary-hover: #4338ca;
+        --primary-fg: #ffffff;
+        --danger: #ef4444;
+        --radius: 12px;
+        --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+        --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+
+      [data-theme='dark'] {
+        --bg: #000000;
+        --surface: #0a0a0a;
+        --surface-2: #171717;
+        --text: #ffffff;
+        --text-secondary: #a1a1aa;
+        --border: #27272a;
+        --primary: #6366f1;
+        --primary-hover: #818cf8;
+        --primary-fg: #ffffff;
+        --shadow: 0 10px 15px -3px rgb(0 0 0 / 0.5);
+      }
+
+      * { box-sizing: border-box; transition: background-color 0.2s, border-color 0.2s, color 0.1s; }
+      
+      body {
+        font-family: var(--font-sans);
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        line-height: 1.5;
+      }
+
+      /* Lock Screen */
+      #auth-screen {
+        position: fixed;
+        inset: 0;
+        background: var(--bg);
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+      }
+      
+      .auth-container {
+        width: 100%;
+        max-width: 360px;
+        padding: 2rem;
+        text-align: center;
+        animation: fadeIn 0.5s ease-out;
+      }
+
+      .logo-icon {
+        width: 64px;
+        height: 64px;
+        background: var(--primary);
+        border-radius: 18px;
+        margin: 0 auto 1.5rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 28px;
+        box-shadow: 0 10px 20px -5px var(--primary);
+        background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      }
+
+      /* Main Layout */
+      #main-content { display: none; margin: 0 auto; width: 100%; max-width: 900px; padding: 2rem 1rem; }
+      
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 2rem;
+        padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border);
+      }
+      
+      .title { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.025em; }
+
+      /* Components */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: var(--shadow);
+      }
+      
+      .card h2 {
+        font-size: 1.1rem;
+        font-weight: 600;
+        margin: 0 0 1.25rem 0;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+      
+      .form-group { margin-bottom: 1rem; }
+      .form-group label { display: block; font-size: 0.875rem; font-weight: 500; color: var(--text-secondary); margin-bottom: 0.375rem; }
+      
+      input[type="text"], input[type="password"], input[type="number"] {
+        width: 100%;
+        padding: 0.625rem 0.875rem;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 0.9rem;
+        outline: none;
+      }
+      input:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+      }
+
+      /* Custom File Buffer */
+      .file-input-wrapper {
+        position: relative;
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+      }
+      .file-input-wrapper input[type="file"] {
+        position: absolute;
+        width: 0.1px;
+        height: 0.1px;
+        opacity: 0;
+        overflow: hidden;
+        z-index: -1;
+      }
+      .file-label {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.625rem 1rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        border-radius: 8px;
+        cursor: pointer;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        transition: all 0.2s;
+        flex-shrink: 0;
+      }
+      .file-label:hover {
+        background: color-mix(in srgb, var(--surface-2) 90%, black);
+        border-color: var(--text-secondary);
+      }
+      .file-name {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.625rem 1.25rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        border-radius: 8px;
+        cursor: pointer;
+        border: 1px solid transparent;
+        transition: all 0.2s;
+        gap: 0.5rem;
+      }
+      
+      .btn-primary {
+        background: var(--primary);
+        color: var(--primary-fg);
+        box-shadow: 0 2px 4px rgb(0 0 0 / 0.1);
+      }
+      .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+      
+      .btn-ghost {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 1px solid var(--border);
+      }
+      .btn-ghost:hover { background: var(--surface-2); color: var(--text); }
+      
+      .btn-danger {
+        background: transparent;
+        color: var(--danger);
+        border: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
+      }
+      .btn-danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+
+      /* Table */
+      .table-wrapper { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
+      table { width: 100%; border-collapse: collapse; text-align: left; }
+      th {
+        background: var(--surface-2);
+        padding: 0.75rem 1rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-secondary);
+        border-bottom: 1px solid var(--border);
+      }
+      td { padding: 0.875rem 1rem; border-bottom: 1px solid var(--border); font-size: 0.875rem; }
+      tr:last-child td { border-bottom: none; }
+      tr:hover td { background: var(--surface-2); }
+      
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: 99px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        background: color-mix(in srgb, var(--primary) 10%, transparent);
+        color: var(--primary);
+      }
+
+      /* Helpers */
+      .muted { color: var(--text-secondary); font-size: 0.875rem; }
+      .flex-end { display: flex; justify-content: flex-end; gap: 0.5rem; }
+      .animate-shake { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
+      
+      @keyframes shake { 10%, 90% { transform: translate3d(-1px, 0, 0); } 20%, 80% { transform: translate3d(2px, 0, 0); } 30%, 50%, 70% { transform: translate3d(-4px, 0, 0); } 40%, 60% { transform: translate3d(4px, 0, 0); } }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>
   </head>
   <body>
-    <h1>Kiro Account Manager - Admin</h1>
-    <div class="card">
-      <h2>API Key</h2>
-      <div class="row">
-        <div>
-          <label>API Key (optional)</label>
-          <input id="apiKey" type="password" placeholder="Leave empty if no auth" />
-          <div class="muted">Used for admin actions if proxy API key is set.</div>
-        </div>
-        <div style="align-self:end;">
-          <button onclick="saveKey()">Save</button>
-        </div>
+    <!-- Auth Screen -->
+    <div id="auth-screen">
+      <div class="auth-container">
+        <div class="logo-icon">🛡️</div>
+        <h2 id="auth-title" style="font-size: 1.5rem; margin-bottom: 0.5rem; font-weight: 700;">Account Locked</h2>
+        <p id="auth-subtitle" class="muted" style="margin-bottom: 2rem;">Please enter your password to continue</p>
+        
+        <form onsubmit="handleAuth(event)">
+            <div class="form-group">
+                <input type="password" id="auth-password" placeholder="Enter Password" autofocus />
+            </div>
+            <button class="btn btn-primary" style="width: 100%" data-i18n="accessPortal">Access Portal</button>
+        </form>
+        <p id="auth-hint" class="muted" style="margin-top: 1rem; font-size: 0.75rem; opacity: 0.7;">Default: admin</p>
       </div>
     </div>
-    <div class="card">
-      <h2>Proxy Config</h2>
-      <div class="row">
-        <div>
-          <label>Enabled</label>
-          <input id="proxyEnabled" type="checkbox" />
+
+    <!-- Main Content -->
+    <div id="main-content">
+      <div class="header">
+        <div class="flex items-center gap-3">
+             <div class="logo-icon" style="width: 40px; height: 40px; border-radius: 10px; font-size: 20px; margin: 0;">⚡</div>
+             <div>
+                 <h1 class="title">Admin Portal</h1>
+                 <div class="muted" style="font-size: 0.8rem;">Kiro Account Manager</div>
+             </div>
         </div>
-        <div>
-          <label>Port</label>
-          <input id="proxyPort" type="number" min="1" max="65535" />
-        </div>
-        <div>
-          <label>API Key</label>
-          <input id="proxyApiKey" type="password" placeholder="Optional" />
-        </div>
-        <div style="align-self:end;">
-          <button onclick="updateProxy()">Apply</button>
+        <div class="flex-end">
+          <button class="btn btn-ghost" onclick="toggleLang()" id="lang-btn" title="Switch Language" style="font-weight: 600;">
+             ZH
+          </button>
+          <button class="btn btn-ghost" onclick="toggleTheme()" id="theme-btn" title="Toggle Theme">
+             🌗
+          </button>
+          <button class="btn btn-danger" onclick="logout()">
+             <span style="font-size: 1.1em">🔒</span> <span data-i18n="lock">Lock</span>
+          </button>
         </div>
       </div>
-    </div>
-    <div class="card">
-      <h2>Accounts</h2>
-      <table id="accountsTable">
-        <thead>
-          <tr><th>Email</th><th>Status</th><th>Action</th></tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-    <div class="card">
-      <h2>Import OIDC Account</h2>
-      <form id="importForm">
-        <label>kiro-auth-token.json</label>
-        <input type="file" name="tokenFile" accept=".json" />
-        <label>Client credentials JSON (same folder)</label>
-        <input type="file" name="clientFile" accept=".json" />
-        <div style="margin-top:12px;">
-          <button type="submit">Import</button>
+
+      <div class="card">
+        <h2 data-i18n="apiConfig">🔑 API Configuration</h2>
+        <div class="grid">
+          <div class="form-group" style="grid-column: 1 / -1;">
+            <label data-i18n="adminKey">Admin Access Key</label>
+            <div style="display: flex; gap: 0.5rem;">
+               <input id="apiKey" type="password" placeholder="Access token for API operations" />
+               <button class="btn btn-primary" onclick="saveKey()" data-i18n="save">Save</button>
+            </div>
+            <p class="muted" style="margin-top: 0.5rem;" data-i18n="adminKeyDesc">This key is used to authenticate requests between this dashboard and the proxy.</p>
+          </div>
         </div>
-      </form>
-      <div id="importResult" class="muted"></div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="proxySettings">🌐 Proxy Settings</h2>
+        <div class="grid">
+           <div class="form-group">
+              <label data-i18n="status">Status</label>
+              <div style="display: flex; align-items: center; gap: 0.75rem; min-height: 42px;">
+                  <label class="switch" style="margin: 0; display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                      <input id="proxyEnabled" type="checkbox" style="width: auto; margin: 0;">
+                      <span data-i18n="enableProxy">Enable Proxy Server</span>
+                  </label>
+              </div>
+           </div>
+           <div class="form-group">
+              <label data-i18n="port">Port</label>
+              <input id="proxyPort" type="number" min="1" max="65535" />
+           </div>
+           <div class="form-group">
+              <label data-i18n="proxyKey">Proxy API Key (Optional)</label>
+              <input id="proxyApiKey" type="password" placeholder="Optional protection" />
+           </div>
+        </div>
+        <div class="flex-end" style="margin-top: 1rem;">
+           <button class="btn btn-primary" onclick="updateProxy()" data-i18n="applySettings">Apply Settings</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="accounts">👥 Active Accounts</h2>
+        <div class="table-wrapper">
+            <table id="accountsTable">
+              <thead>
+                <tr><th data-i18n="email">Email</th><th data-i18n="status">Status</th><th data-i18n="actions">Actions</th></tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 data-i18n="importAccount">📤 Import Account</h2>
+        <form id="importForm" style="display: grid; gap: 1rem;">
+           <div class="grid">
+               <div class="form-group">
+                 <label data-i18n="tokenFile">Token File (kiro-auth-token.json)</label>
+                 <div class="file-input-wrapper">
+                    <label for="tokenFile" class="file-label" data-i18n="chooseFile">Choose File</label>
+                    <input type="file" id="tokenFile" name="tokenFile" accept=".json" required onchange="updateFileLabel(this)" />
+                    <span class="file-name" data-i18n="noFileChosen">No file chosen</span>
+                 </div>
+               </div>
+               <div class="form-group">
+                 <label data-i18n="clientFile">Client File (client-identifier.json)</label>
+                 <div class="file-input-wrapper">
+                    <label for="clientFile" class="file-label" data-i18n="chooseFile">Choose File</label>
+                    <input type="file" id="clientFile" name="clientFile" accept=".json" required onchange="updateFileLabel(this)" />
+                    <span class="file-name" data-i18n="noFileChosen">No file chosen</span>
+                 </div>
+               </div>
+           </div>
+           <div class="flex-end">
+              <button type="submit" class="btn btn-ghost" style="border-color: var(--primary); color: var(--primary);" data-i18n="importJson">
+                 📥 Import JSON
+              </button>
+           </div>
+        </form>
+        <div id="importResult" class="muted" style="margin-top: 1rem;"></div>
+      </div>
     </div>
+
     <script>
+      // Translations
+      const i18n = {
+        en: {
+          lockTitle: "Account Locked",
+          lockSubtitle: "Please enter your password to continue",
+          setupTitle: "Setup Password",
+          setupSubtitle: "Create a password to secure this portal",
+          inputPass: "Enter Password",
+          createPass: "Create new password",
+          accessPortal: "Access Portal",
+          welcomeBack: "Welcome Back",
+          authHint: "Default: admin",
+          
+          apiConfig: "🔑 API Configuration",
+          adminKey: "Admin Access Key",
+          adminKeyDesc: "This key is used to authenticate requests between this dashboard and the proxy.",
+          save: "Save",
+          saved: "Saved!",
+          
+          proxySettings: "🌐 Proxy Settings",
+          status: "Status",
+          enableProxy: "Enable Proxy Server",
+          port: "Port",
+          proxyKey: "Proxy API Key (Optional)",
+          applySettings: "Apply Settings",
+          updating: "Updating...",
+          settingsApplied: "Settings Applied",
+          errorUpdating: "Error updating settings",
+          
+          accounts: "👥 Active Accounts",
+          email: "Email",
+          actions: "Actions",
+          remove: "Remove",
+          confirmDelete: "Are you sure you want to delete this account?",
+          noAccounts: "No accounts found",
+          
+          importAccount: "📤 Import Account",
+          tokenFile: "Token File (kiro-auth-token.json)",
+          clientFile: "Client File (client-identifier.json)",
+          chooseFile: "Choose File",
+          noFileChosen: "No file chosen",
+          importJson: "📥 Import JSON",
+          importing: "Importing...",
+          uploadFailed: "Upload failed",
+          successAdded: "Success! Added",
+          
+          lock: "Lock"
+        },
+        zh: {
+          lockTitle: "账户已锁定",
+          lockSubtitle: "请输入密码以继续访问",
+          setupTitle: "设置密码",
+          setupSubtitle: "请创建一个密码来保护此后台",
+          inputPass: "输入密码",
+          createPass: "创建新密码",
+          accessPortal: "进入后台",
+          welcomeBack: "欢迎回来",
+          authHint: "默认密码: admin",
+          
+          apiConfig: "🔑 API 配置",
+          adminKey: "管理员访问密钥",
+          adminKeyDesc: "此密钥用于验证仪表板与代理服务之间的请求。",
+          save: "保存",
+          saved: "已保存!",
+          
+          proxySettings: "🌐 代理设置",
+          status: "状态",
+          enableProxy: "启用代理服务器",
+          port: "端口",
+          proxyKey: "代理 API 密钥 (可选)",
+          applySettings: "应用设置",
+          updating: "更新中...",
+          settingsApplied: "设置已应用",
+          errorUpdating: "更新设置失败",
+          
+          accounts: "👥 活跃账号",
+          email: "邮箱",
+          actions: "操作",
+          remove: "删除",
+          confirmDelete: "确定要删除这个账号吗？",
+          noAccounts: "暂无账号",
+          
+          importAccount: "📤 导入账号",
+          tokenFile: "Token 文件 (kiro-auth-token.json)",
+          clientFile: "客户端文件 (client-identifier.json)",
+          chooseFile: "选择文件",
+          noFileChosen: "未选择文件",
+          importJson: "📥 导入 JSON",
+          importing: "导入中...",
+          uploadFailed: "上传失败",
+          successAdded: "成功！已添加",
+          
+          lock: "锁定"
+        }
+      };
+
+      // State
+      const state = {
+        theme: localStorage.getItem('theme') || 'light',
+        lang: localStorage.getItem('lang') || 'zh', // Default to Chinese as user requested
+        locked: true,
+        password: localStorage.getItem('admin_password') || null
+      };
+
+      // I18n Helper
+      function t(key) {
+        return i18n[state.lang][key] || key;
+      }
+
+      function applyLanguage() {
+        document.documentElement.lang = state.lang;
+        document.getElementById('lang-btn').textContent = state.lang === 'en' ? '中' : 'EN';
+        
+        // Update simple texts
+        document.querySelectorAll('[data-i18n]').forEach(el => {
+           const key = el.getAttribute('data-i18n');
+           if(i18n[state.lang][key]) {
+               el.textContent = i18n[state.lang][key];
+           }
+        });
+
+        // Update Auth Screen
+        const authTitle = document.getElementById('auth-title');
+        const authSubtitle = document.getElementById('auth-subtitle');
+        const authInput = document.getElementById('auth-password');
+        const authHint = document.getElementById('auth-hint');
+        
+        if (!state.password) {
+            authTitle.textContent = t('setupTitle');
+            authSubtitle.textContent = t('setupSubtitle');
+            authInput.placeholder = t('createPass');
+        } else if (state.locked) {
+            authTitle.textContent = t('welcomeBack'); // or t('lockTitle')
+            authSubtitle.textContent = t('lockSubtitle');
+            authInput.placeholder = t('inputPass');
+        }
+        authHint.textContent = t('authHint');
+        
+        // Refresh dynamic content like tables
+        if(!state.locked) loadData();
+      }
+
+      function toggleLang() {
+        state.lang = state.lang === 'en' ? 'zh' : 'en';
+        localStorage.setItem('lang', state.lang);
+        applyLanguage();
+      }
+
+      // Utils
+      function updateFileLabel(input) {
+        const span = input.parentElement.querySelector('.file-name');
+        if (input.files && input.files.length > 0) {
+            span.textContent = input.files[0].name;
+            span.style.color = 'var(--text)';
+        } else {
+            span.textContent = t('noFileChosen');
+            span.style.color = 'var(--text-secondary)';
+        }
+      }
+
+      // Theme Management
+      function applyTheme() {
+         document.documentElement.setAttribute('data-theme', state.theme);
+      }
+      
+      function toggleTheme() {
+         state.theme = state.theme === 'dark' ? 'light' : 'dark';
+         localStorage.setItem('theme', state.theme);
+         applyTheme();
+      }
+
+      // Auth Management
+      const authScreen = document.getElementById('auth-screen');
+      const mainContent = document.getElementById('main-content');
+      const authInput = document.getElementById('auth-password');
+
+      function initAuth() {
+         applyTheme();
+         applyLanguage();
+         if (!state.password) {
+            document.getElementById('auth-hint').style.display = 'none';
+         }
+      }
+
+      function handleAuth(e) {
+         e.preventDefault();
+         const input = authInput.value;
+         
+         if (!state.password) {
+             if (input.length < 4) {
+                 alert('Password/密码 must be at least 4 characters');
+                 return;
+             }
+             state.password = input;
+             localStorage.setItem('admin_password', input);
+             unlock();
+         } else {
+             if (input === state.password) {
+                 unlock();
+             } else {
+                 authInput.parentElement.classList.add('animate-shake');
+                 setTimeout(() => authInput.parentElement.classList.remove('animate-shake'), 500);
+                 authInput.value = '';
+             }
+         }
+      }
+
+      function unlock() {
+         state.locked = false;
+         authScreen.style.opacity = '0';
+         setTimeout(() => {
+             authScreen.style.display = 'none';
+             mainContent.style.display = 'block';
+             loadData();
+         }, 500);
+      }
+
+      function logout() {
+          state.locked = true;
+          authScreen.style.display = 'flex';
+          authScreen.style.opacity = '1';
+          mainContent.style.display = 'none';
+          authInput.value = '';
+          applyLanguage(); // Reset text to lock screen state
+      }
+
+      // Admin Logic
       const apiKeyInput = document.getElementById('apiKey');
       apiKeyInput.value = localStorage.getItem('adminApiKey') || '';
+
       function saveKey() {
         localStorage.setItem('adminApiKey', apiKeyInput.value || '');
-        alert('Saved');
+        const btn = event.target;
+        const originalText = btn.textContent;
+        btn.textContent = t('saved');
+        setTimeout(() => btn.textContent = originalText, 2000);
       }
+
       function headers() {
         const key = localStorage.getItem('adminApiKey');
         return key ? { 'Authorization': 'Bearer ' + key } : {};
       }
+
       async function loadData() {
-        const res = await fetch('/admin/data', { headers: headers() });
-        if (!res.ok) return;
-        const data = await res.json();
-        document.getElementById('proxyEnabled').checked = !!data.proxy.enabled;
-        document.getElementById('proxyPort').value = data.proxy.port || 3001;
-        document.getElementById('proxyApiKey').value = '';
-        const tbody = document.querySelector('#accountsTable tbody');
-        tbody.innerHTML = '';
-        data.accounts.forEach(acc => {
-          const tr = document.createElement('tr');
-          tr.innerHTML = '<td>' + (acc.email || 'unknown') + '</td><td>' + (acc.status || '') + '</td><td><button data-id=\"' + acc.id + '\">Delete</button></td>';
-          tr.querySelector('button').onclick = async () => {
-            await fetch('/admin/account?id=' + encodeURIComponent(acc.id), { method: 'DELETE', headers: headers() });
-            await loadData();
-          };
-          tbody.appendChild(tr);
-        });
+        try {
+            const res = await fetch('/admin/data', { headers: headers() });
+            if (!res.ok) {
+                 if (res.status === 401) alert('API Key Invalid or Missing / API 密钥无效或丢失');
+                 return;
+            }
+            const data = await res.json();
+            
+            // Only update inputs if not currently focused (to avoid typing interruptions if auto-refresh)
+            if(document.activeElement !== document.getElementById('proxyPort')) {
+                 document.getElementById('proxyEnabled').checked = !!data.proxy.enabled;
+                 document.getElementById('proxyPort').value = data.proxy.port || 3001;
+            }
+            
+            const tbody = document.querySelector('#accountsTable tbody');
+            tbody.innerHTML = '';
+            
+            if (data.accounts.length === 0) {
+               tbody.innerHTML = '<tr><td colspan="3" class="muted" style="text-align: center; padding: 2rem;">' + t('noAccounts') + '</td></tr>';
+            } else {
+                data.accounts.forEach(acc => {
+                  const tr = document.createElement('tr');
+                  tr.innerHTML = \`
+                    <td><div style="font-weight: 500">\${acc.email || 'Unknown'}</div><div class="muted" style="font-size: 0.75rem">\${acc.id}</div></td>
+                    <td><span class="status-badge">\${acc.status || 'Active'}</span></td>
+                    <td><button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.75rem" data-id="\${acc.id}">\${t('remove')}</button></td>
+                  \`;
+                  tr.querySelector('button').onclick = async () => {
+                    if(!confirm(t('confirmDelete'))) return;
+                    await fetch('/admin/account?id=' + encodeURIComponent(acc.id), { method: 'DELETE', headers: headers() });
+                    await loadData();
+                  };
+                  tbody.appendChild(tr);
+                });
+            }
+        } catch (e) {
+            console.error(e);
+        }
       }
+
       async function updateProxy() {
         const payload = {
           enabled: document.getElementById('proxyEnabled').checked,
           port: parseInt(document.getElementById('proxyPort').value, 10),
           apiKey: document.getElementById('proxyApiKey').value
         };
-        await fetch('/admin/proxy', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify(payload) });
-        await loadData();
+        const btn = event.target;
+        btn.disabled = true;
+        btn.textContent = t('updating');
+        
+        try {
+            await fetch('/admin/proxy', { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers() }, body: JSON.stringify(payload) });
+            await loadData();
+            btn.textContent = t('settingsApplied');
+        } catch(e) {
+            alert(t('errorUpdating'));
+            btn.textContent = t('applySettings');
+        }
+        setTimeout(() => { btn.disabled = false; btn.textContent = t('applySettings'); }, 2000);
       }
+
       document.getElementById('importForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const form = e.target;
+        const btn = form.querySelector('button[type="submit"]');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = t('importing');
+        
         const data = new FormData(form);
-        const res = await fetch('/admin/account', { method: 'POST', headers: headers(), body: data });
-        const text = await res.text();
-        document.getElementById('importResult').textContent = text;
-        await loadData();
+        try {
+            const res = await fetch('/admin/account', { method: 'POST', headers: headers(), body: data });
+            const result = await res.json();
+             document.getElementById('importResult').innerHTML = result.error ? 
+                \`<span style="color: var(--danger)">Error: \${result.error}</span>\` : 
+                \`<span style="color: var(--primary)">\${t('successAdded')} \${result.account.email}</span>\`;
+            if (result.ok) {
+                form.reset();
+                // Reset file labels
+                form.querySelectorAll('.file-name').forEach(span => {
+                    span.textContent = t('noFileChosen');
+                    span.style.color = 'var(--text-secondary)';
+                });
+                await loadData();
+            }
+        } catch (e) {
+            document.getElementById('importResult').textContent = t('uploadFailed');
+        }
+        btn.disabled = false;
+        btn.textContent = originalText;
       });
-      loadData();
+
+      // Init
+      initAuth();
     </script>
   </body>
 </html>`;
@@ -351,7 +939,8 @@ export function startKiroProxyServer(options: ProxyOptions) {
       if (!isAuthorized(req, apiKey)) {
         return sendJson(res, 401, { error: 'Unauthorized' })
       }
-      if (!options.addAccountFromOidcFiles) {
+      const addAccountFn = options.addAccountFromOidcFiles
+      if (!addAccountFn) {
         return sendJson(res, 400, { error: 'Import not supported' })
       }
       const contentType = req.headers['content-type'] || ''
@@ -370,7 +959,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
           }
           const tokenJson = JSON.parse(files.tokenFile.content.toString('utf8'))
           const clientJson = JSON.parse(files.clientFile.content.toString('utf8'))
-          const result = await options.addAccountFromOidcFiles(tokenJson, clientJson)
+          const result = await addAccountFn(tokenJson, clientJson)
           sendJson(res, 200, { ok: true, account: result })
         } catch (error: any) {
           sendJson(res, 500, { error: error.message || 'Import failed' })

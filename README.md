@@ -1,4 +1,4 @@
-# Kiro 账户管理器
+# Kiro 账户管理器 (Fork)
 
 <p align="center">
   <img src="Kiro-account-manager/resources/icon.png" width="128" height="128" alt="Kiro Logo">
@@ -11,6 +11,35 @@
 <p align="center">
   支持多账号快速切换、自动 Token 刷新、分组标签管理、机器码管理等功能
 </p>
+
+
+## ✨ 新增功能 (Fork 版)
+
+本分支在原版基础上增加了轻量级后台和反代功能：
+
+- **本地 HTTP 代理**: 兼容 OpenAI/Claude 格式，提供 `/v1/chat/completions`, `/v1/messages`, 和 `/v1/models` 接口
+- **负载均衡**: 支持账号轮询池，请求失败自动冷却，并在恢复后自动重新加入
+- **可视化配置**: 支持在 UI 设置中配置代理端口和 API Key
+- **无缝集成**: 复用现有的账号存储和自动刷新逻辑
+- **Web 管理后台**: 提供轻量级 Web 界面 `/admin`，支持远程管理账号和导入 OIDC 凭证
+
+### 🚀 快速开始
+
+1. 启动应用。
+2. 进入 **设置** 页面，启用 "Local API Proxy"，并设置端口和 API Key。
+3. 调用代理接口示例：
+
+```bash
+curl http://127.0.0.1:3001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <API_KEY>" \
+  -d '{"model":"claude-opus-4-5","messages":[{"role":"user","content":"Hello"}],"stream":false}'
+```
+
+### 🌐 Web 管理后台
+
+- 浏览器访问 `http://<server-ip>:<port>/admin`
+- 支持管理账号列表、配置代理参数、导入 OIDC 凭证（支持拖拽两个 JSON 文件导入）
 
 ---
 
@@ -49,6 +78,7 @@
 
 ### 🌐 代理支持
 - 支持 HTTP/HTTPS/SOCKS5 代理
+- 内置 Local API Proxy (OpenAI/Claude 兼容)
 - 所有网络请求通过代理服务器
 
 ### 🔄 自动更新检测

@@ -86,6 +86,7 @@
   --color-primary: #a855f7;
   --color-ring: #a855f7;
 }
+
 .theme-purple.dark {
   --color-primary: #c084fc;
   --color-ring: #c084fc;
@@ -96,6 +97,7 @@
   --color-primary: #10b981;
   --color-ring: #10b981;
 }
+
 .theme-emerald.dark {
   --color-primary: #34d399;
   --color-ring: #34d399;
@@ -106,6 +108,7 @@
   --color-primary: #f97316;
   --color-ring: #f97316;
 }
+
 .theme-orange.dark {
   --color-primary: #fb923c;
   --color-ring: #fb923c;
@@ -116,6 +119,7 @@
   --color-primary: #f43f5e;
   --color-ring: #f43f5e;
 }
+
 .theme-rose.dark {
   --color-primary: #fb7185;
   --color-ring: #fb7185;
@@ -126,6 +130,7 @@
   --color-primary: #06b6d4;
   --color-ring: #06b6d4;
 }
+
 .theme-cyan.dark {
   --color-primary: #22d3ee;
   --color-ring: #22d3ee;
@@ -136,6 +141,7 @@
   --color-primary: #f59e0b;
   --color-ring: #f59e0b;
 }
+
 .theme-amber.dark {
   --color-primary: #fbbf24;
   --color-ring: #fbbf24;
@@ -146,6 +152,7 @@
   --color-primary: #14b8a6;
   --color-ring: #14b8a6;
 }
+
 .theme-teal.dark {
   --color-primary: #2dd4bf;
   --color-ring: #2dd4bf;
@@ -156,6 +163,7 @@
   --color-primary: #6366f1;
   --color-ring: #6366f1;
 }
+
 .theme-indigo.dark {
   --color-primary: #818cf8;
   --color-ring: #818cf8;
@@ -166,6 +174,7 @@
   --color-primary: #84cc16;
   --color-ring: #84cc16;
 }
+
 .theme-lime.dark {
   --color-primary: #a3e635;
   --color-ring: #a3e635;
@@ -176,6 +185,7 @@
   --color-primary: #ec4899;
   --color-ring: #ec4899;
 }
+
 .theme-pink.dark {
   --color-primary: #f472b6;
   --color-ring: #f472b6;
@@ -186,6 +196,7 @@
   --color-primary: #64748b;
   --color-ring: #64748b;
 }
+
 .theme-slate.dark {
   --color-primary: #94a3b8;
   --color-ring: #94a3b8;
@@ -196,6 +207,7 @@
   --color-primary: #71717a;
   --color-ring: #71717a;
 }
+
 .theme-zinc.dark {
   --color-primary: #a1a1aa;
   --color-ring: #a1a1aa;
@@ -206,6 +218,7 @@
   --color-primary: #0ea5e9;
   --color-ring: #0ea5e9;
 }
+
 .theme-sky.dark {
   --color-primary: #38bdf8;
   --color-ring: #38bdf8;
@@ -216,6 +229,7 @@
   --color-primary: #8b5cf6;
   --color-ring: #8b5cf6;
 }
+
 .theme-violet.dark {
   --color-primary: #a78bfa;
   --color-ring: #a78bfa;
@@ -226,6 +240,7 @@
   --color-primary: #d946ef;
   --color-ring: #d946ef;
 }
+
 .theme-fuchsia.dark {
   --color-primary: #e879f9;
   --color-ring: #e879f9;
@@ -236,6 +251,7 @@
   --color-primary: #ef4444;
   --color-ring: #ef4444;
 }
+
 .theme-red.dark {
   --color-primary: #f87171;
   --color-ring: #f87171;
@@ -246,6 +262,7 @@
   --color-primary: #eab308;
   --color-ring: #eab308;
 }
+
 .theme-yellow.dark {
   --color-primary: #facc15;
   --color-ring: #facc15;
@@ -256,6 +273,7 @@
   --color-primary: #22c55e;
   --color-ring: #22c55e;
 }
+
 .theme-green.dark {
   --color-primary: #4ade80;
   --color-ring: #4ade80;
@@ -266,6 +284,7 @@
   --color-primary: #78716c;
   --color-ring: #78716c;
 }
+
 .theme-stone.dark {
   --color-primary: #a8a29e;
   --color-ring: #a8a29e;
@@ -276,6 +295,7 @@
   --color-primary: #737373;
   --color-ring: #737373;
 }
+
 .theme-neutral.dark {
   --color-primary: #a3a3a3;
   --color-ring: #a3a3a3;

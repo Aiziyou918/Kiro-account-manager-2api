@@ -26,7 +26,7 @@ export function Sidebar({ currentPage, onPageChange, collapsed, onToggleCollapse
   const { darkMode } = useAccountsStore()
 
   return (
-    <div 
+    <div
       className={cn(
         "h-screen bg-card border-r flex flex-col transition-all duration-300",
         collapsed ? "w-16" : "w-52"
@@ -35,17 +35,17 @@ export function Sidebar({ currentPage, onPageChange, collapsed, onToggleCollapse
       {/* Logo */}
       <div className="h-12 flex items-center justify-center border-b px-2 gap-2 overflow-hidden">
         {collapsed ? (
-          <img 
-            src={kiroLogoSmall} 
-            alt="Kiro" 
-            className={cn("h-14 w-14 object-contain transition-all", darkMode && "invert brightness-0")} 
+          <img
+            src={kiroLogoSmall}
+            alt="Kiro"
+            className={cn("h-14 w-14 object-contain transition-all", darkMode && "invert brightness-0")}
           />
         ) : (
           <>
-            <img 
-              src={kiroLogo} 
-              alt="Kiro" 
-              className={cn("h-7 w-auto shrink-0 transition-all", darkMode && "invert brightness-0")} 
+            <img
+              src={kiroLogo}
+              alt="Kiro"
+              className={cn("h-7 w-auto shrink-0 transition-all", darkMode && "invert brightness-0")}
             />
             <span className="font-semibold text-foreground whitespace-nowrap">账户管理器</span>
           </>
@@ -63,8 +63,8 @@ export function Sidebar({ currentPage, onPageChange, collapsed, onToggleCollapse
               onClick={() => onPageChange(item.id)}
               className={cn(
                 "w-full flex items-center rounded-lg text-sm font-medium transition-all overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
-                isActive 
-                  ? "bg-primary text-primary-foreground shadow-sm" 
+                isActive
+                  ? "bg-primary text-primary-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground hover:bg-muted",
                 collapsed ? "justify-center p-2.5" : "gap-3 px-3 py-2.5"
               )}
