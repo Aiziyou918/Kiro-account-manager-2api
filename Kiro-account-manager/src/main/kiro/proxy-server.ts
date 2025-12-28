@@ -106,26 +106,146 @@ function claudeToOpenAIResponse(claudeMessage: any) {
   }
 }
 
-function buildOpenAIStreamChunk(
-  id: string,
+
+function convertClaudeStreamChunkToOpenAIChunks(
+  claudeChunk: any,
   model: string,
-  created: number,
-  delta: Record<string, unknown>,
-  finishReason: string | null
+  openaiId: string,
+  created: number
 ) {
-  return {
-    id,
-    object: 'chat.completion.chunk',
-    created,
-    model,
-    choices: [
-      {
-        index: 0,
-        delta,
-        finish_reason: finishReason
-      }
-    ]
+  if (!claudeChunk) return []
+
+  const chunkId = openaiId || `chatcmpl_${Date.now()}`
+  const timestamp = created || Math.floor(Date.now() / 1000)
+
+  const buildChunk = (delta: Record<string, unknown>, finishReason: string | null, usage?: any) => {
+    const chunk: any = {
+      id: chunkId,
+      object: 'chat.completion.chunk',
+      created: timestamp,
+      model,
+      choices: [
+        {
+          index: 0,
+          delta,
+          finish_reason: finishReason
+        }
+      ]
+    }
+    if (usage) chunk.usage = usage
+    return chunk
   }
+
+  if (claudeChunk.type === 'message_start') {
+    const usage = claudeChunk.message?.usage
+    const usagePayload = usage
+      ? {
+        prompt_tokens: usage.input_tokens || 0,
+        completion_tokens: 0,
+        total_tokens: usage.input_tokens || 0,
+        cached_tokens: usage.cache_read_input_tokens || 0,
+        prompt_tokens_details: {
+          cached_tokens: usage.cache_read_input_tokens || 0
+        }
+      }
+      : undefined
+
+    return [buildChunk({ role: 'assistant', content: '' }, null, usagePayload)]
+  }
+
+  if (claudeChunk.type === 'content_block_start') {
+    const contentBlock = claudeChunk.content_block
+    if (contentBlock?.type === 'tool_use') {
+      return [
+        buildChunk(
+          {
+            tool_calls: [
+              {
+                index: claudeChunk.index || 0,
+                id: contentBlock.id,
+                type: 'function',
+                function: {
+                  name: contentBlock.name,
+                  arguments: ''
+                }
+              }
+            ]
+          },
+          null
+        )
+      ]
+    }
+
+    return [buildChunk({ content: '' }, null)]
+  }
+
+  if (claudeChunk.type === 'content_block_delta') {
+    const delta = claudeChunk.delta
+    if (delta?.type === 'text_delta') {
+      return [buildChunk({ content: delta.text || '' }, null)]
+    }
+    if (delta?.type === 'thinking_delta') {
+      return [buildChunk({ reasoning_content: delta.thinking || '' }, null)]
+    }
+    if (delta?.type === 'input_json_delta') {
+      return [
+        buildChunk(
+          {
+            tool_calls: [
+              {
+                index: claudeChunk.index || 0,
+                function: {
+                  arguments: delta.partial_json || ''
+                }
+              }
+            ]
+          },
+          null
+        )
+      ]
+    }
+  }
+
+  if (claudeChunk.type === 'content_block_stop') {
+    return [buildChunk({}, null)]
+  }
+
+  if (claudeChunk.type === 'message_delta') {
+    const stopReason = claudeChunk.delta?.stop_reason
+    const finishReason =
+      stopReason === 'end_turn'
+        ? 'stop'
+        : stopReason === 'max_tokens'
+          ? 'length'
+          : stopReason === 'tool_use'
+            ? 'tool_calls'
+            : stopReason || 'stop'
+
+    const usage = claudeChunk.usage
+    const usagePayload = usage
+      ? {
+        prompt_tokens: usage.input_tokens || 0,
+        completion_tokens: usage.output_tokens || 0,
+        total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+        cached_tokens: usage.cache_read_input_tokens || 0,
+        prompt_tokens_details: {
+          cached_tokens: usage.cache_read_input_tokens || 0
+        }
+      }
+      : undefined
+
+    return [buildChunk({}, finishReason, usagePayload)]
+  }
+
+  if (claudeChunk.type === 'message_stop') {
+    return [buildChunk({}, 'stop')]
+  }
+
+  if (typeof claudeChunk === 'string') {
+    return [buildChunk({ content: claudeChunk }, null)]
+  }
+
+  return []
 }
 
 function isTokenNearExpiry(expiresAt: number, refreshBeforeExpiryMs: number) {
@@ -434,7 +554,49 @@ function renderAdminPage() {
       .animate-shake { animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both; }
       
       @keyframes shake { 10%, 90% { transform: translate3d(-1px, 0, 0); } 20%, 80% { transform: translate3d(2px, 0, 0); } 30%, 50%, 70% { transform: translate3d(-4px, 0, 0); } 40%, 60% { transform: translate3d(4px, 0, 0); } }
+      @keyframes shake { 10%, 90% { transform: translate3d(-1px, 0, 0); } 20%, 80% { transform: translate3d(2px, 0, 0); } 30%, 50%, 70% { transform: translate3d(-4px, 0, 0); } 40%, 60% { transform: translate3d(4px, 0, 0); } }
       @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+      /* Dashboard Specifics */
+      .stat-card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+        transition: transform 0.2s;
+      }
+      .stat-card:hover { transform: translateY(-2px); }
+      .stat-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.5rem;
+        flex-shrink: 0;
+      }
+      .stat-content { display: flex; flex-direction: column; }
+      .stat-value { font-size: 1.5rem; font-weight: 700; line-height: 1.2; }
+      .stat-label { font-size: 0.875rem; color: var(--text-secondary); }
+
+      .progress-bar-bg {
+        width: 100%;
+        height: 8px;
+        background: var(--surface-2);
+        border-radius: 99px;
+        overflow: hidden;
+        margin-top: 0.5rem;
+      }
+      .progress-bar-fill {
+        height: 100%;
+        background: var(--primary);
+        border-radius: 99px;
+        transition: width 0.5s ease-out;
+      }
     </style>
   </head>
   <body>
@@ -476,6 +638,61 @@ function renderAdminPage() {
              <span style="font-size: 1.1em">🔒</span> <span data-i18n="lock">Lock</span>
           </button>
         </div>
+      </div>
+
+      <div id="dashboard-grid" class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin-bottom: 2rem;">
+        <!-- Dynamically populated -->
+      </div>
+      
+      <div class="card" id="credit-stats-card" style="display: none;">
+         <h2 style="margin-bottom: 1.5rem;">
+            <span style="background: var(--surface-2); padding: 6px; border-radius: 8px; display: inline-flex;">📊</span> 
+            <span data-i18n="creditStats">Credit Statistics</span>
+            <span id="credit-stats-subtitle" class="muted" style="font-size: 0.8rem; font-weight: 400; margin-left: 0.5rem;">(based on active accounts)</span>
+         </h2>
+         <div class="grid" style="gap: 2rem;">
+            <div style="background: var(--surface-2); padding: 1.25rem; border-radius: 12px;">
+                <div class="flex items-center gap-2 mb-2" style="color: var(--primary);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                    <span style="font-size: 0.9rem; font-weight: 600;" data-i18n="totalLimit">Total Limit</span>
+                </div>
+                <div id="dash-total-limit" style="font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em;">0</div>
+            </div>
+            
+            <div style="background: var(--surface-2); padding: 1.25rem; border-radius: 12px;">
+                <div class="flex items-center gap-2 mb-2" style="color: #f59e0b;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                    <span style="font-size: 0.9rem; font-weight: 600;" data-i18n="used">Used</span>
+                </div>
+                <div id="dash-used" style="font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em;">0</div>
+            </div>
+
+            <div style="background: var(--surface-2); padding: 1.25rem; border-radius: 12px;">
+                <div class="flex items-center gap-2 mb-2" style="color: #10b981;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                    <span style="font-size: 0.9rem; font-weight: 600;" data-i18n="remaining">Remaining</span>
+                </div>
+                <div id="dash-remaining" style="font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em; color: #10b981;">0</div>
+            </div>
+
+             <div style="background: var(--surface-2); padding: 1.25rem; border-radius: 12px;">
+                <div class="flex items-center gap-2 mb-2" style="color: #8b5cf6;">
+                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/></svg>
+                    <span style="font-size: 0.9rem; font-weight: 600;" data-i18n="usageRate">Usage Rate</span>
+                </div>
+                <div id="dash-rate" style="font-size: 1.75rem; font-weight: 800; letter-spacing: -0.02em;">0%</div>
+            </div>
+         </div>
+         
+         <div style="margin-top: 1.5rem;">
+            <div class="flex justify-between" style="font-size: 0.8rem; margin-bottom: 0.5rem;">
+                <span class="muted" data-i18n="overallProgress">Overall Usage Progress</span>
+                <span id="dash-progress-text" class="muted">0 / 0</span>
+            </div>
+            <div class="progress-bar-bg">
+                <div id="dash-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+            </div>
+         </div>
       </div>
 
       <div class="card">
@@ -608,6 +825,23 @@ function renderAdminPage() {
           uploadFailed: "Upload failed",
           successAdded: "Success! Added",
           
+          successAdded: "Success! Added",
+
+          dashboard: "📊 Dashboard",
+          totalAccounts: "Total Accounts",
+          activeAccounts: "Active",
+          totalLimit: "Total Limit",
+          totalUsage: "Total Usage",
+
+          creditStats: "Credit Statistics",
+          used: "Used",
+          remaining: "Remaining",
+          usageRate: "Usage Rate",
+          overallProgress: "Overall Usage Progress",
+          
+          banned: "Banned",
+          expiringSoon: "Expiring Soon",
+          
           lock: "Lock"
         },
         zh: {
@@ -653,6 +887,23 @@ function renderAdminPage() {
           importing: "导入中...",
           uploadFailed: "上传失败",
           successAdded: "成功！已添加",
+          
+          successAdded: "成功！已添加",
+
+          dashboard: "📊 数据概览",
+          totalAccounts: "总账号数",
+          activeAccounts: "可用账号",
+          totalLimit: "总额度",
+          totalUsage: "已用额度",
+
+          creditStats: "额度统计",
+          used: "已使用",
+          remaining: "剩余额度",
+          usageRate: "使用率",
+          overallProgress: "总体使用进度",
+
+          banned: "已封禁",
+          expiringSoon: "即将过期",
           
           lock: "锁定"
         }
@@ -701,7 +952,10 @@ function renderAdminPage() {
         authHint.textContent = t('authHint');
         
         // Refresh dynamic content like tables
-        if(!state.locked) loadData();
+        if(!state.locked) {
+             loadData();
+             startPolling();
+         }
       }
 
       function toggleLang() {
@@ -776,11 +1030,23 @@ function renderAdminPage() {
              authScreen.style.display = 'none';
              mainContent.style.display = 'block';
              loadData();
+             startPolling();
          }, 500);
-      }
+       }
 
-      function logout() {
-          state.locked = true;
+       let pollInterval;
+       function startPolling() {
+           if(pollInterval) clearInterval(pollInterval);
+           pollInterval = setInterval(() => {
+               if(!state.locked && document.visibilityState === 'visible') {
+                   loadData(true); // true = silent update (don't clear table)
+               }
+           }, 5000);
+       }
+
+       function logout() {
+           clearInterval(pollInterval);
+           state.locked = true;
           authScreen.style.display = 'flex';
           authScreen.style.opacity = '1';
           mainContent.style.display = 'none';
@@ -805,45 +1071,154 @@ function renderAdminPage() {
         return key ? { 'Authorization': 'Bearer ' + key } : {};
       }
 
-      async function loadData() {
+      async function loadData(silent = false) {
         try {
             const res = await fetch('/admin/data', { headers: headers() });
             if (!res.ok) {
-                 if (res.status === 401) alert('API Key Invalid or Missing / API 密钥无效或丢失');
+                 if (res.status === 401) {
+                    alert('API Key Invalid or Missing / API 密钥无效或丢失');
+                    clearInterval(pollInterval);
+                 }
                  return;
             }
             const data = await res.json();
             
             // Only update inputs if not currently focused (to avoid typing interruptions if auto-refresh)
-            if(document.activeElement !== document.getElementById('proxyPort')) {
+            if(document.activeElement !== document.getElementById('proxyPort') && document.activeElement !== document.getElementById('apiKey')) {
                  document.getElementById('proxyEnabled').checked = !!data.proxy.enabled;
                  document.getElementById('proxyPort').value = data.proxy.port || 3001;
+                 document.getElementById('proxyApiKey').value = data.proxy.apiKey || '';
             }
             
             const tbody = document.querySelector('#accountsTable tbody');
-            tbody.innerHTML = '';
             
             if (data.accounts.length === 0) {
-               tbody.innerHTML = '<tr><td colspan="3" class="muted" style="text-align: center; padding: 2rem;">' + t('noAccounts') + '</td></tr>';
+               if(tbody.innerHTML === '' || !silent)
+                  tbody.innerHTML = '<tr><td colspan="3" class="muted" style="text-align: center; padding: 2rem;">' + t('noAccounts') + '</td></tr>';
             } else {
-                data.accounts.forEach(acc => {
-                  const tr = document.createElement('tr');
-                  tr.innerHTML = \`
-                    <td><div style="font-weight: 500">\${acc.email || 'Unknown'}</div><div class="muted" style="font-size: 0.75rem">\${acc.id}</div></td>
-                    <td><span class="status-badge">\${acc.status || 'Active'}</span></td>
-                    <td><button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.75rem" data-id="\${acc.id}">\${t('remove')}</button></td>
-                  \`;
-                  tr.querySelector('button').onclick = async () => {
-                    if(!confirm(t('confirmDelete'))) return;
-                    await fetch('/admin/account?id=' + encodeURIComponent(acc.id), { method: 'DELETE', headers: headers() });
-                    await loadData();
-                  };
-                  tbody.appendChild(tr);
-                });
+                 if(!silent) tbody.innerHTML = ''; 
+                 else {
+                    tbody.innerHTML = ''; // For simplicity, rebuild. Ideally use diffing.
+                 }
+                 
+                 data.accounts.forEach(acc => {
+                        const tr = document.createElement('tr');
+                        
+                        // Determine status color
+                        let statusColor = 'var(--primary)';
+                        if(acc.status === 'error' || acc.status === 'disabled' || acc.status === 'expired') statusColor = 'var(--danger)';
+                        else if(acc.status === 'validating') statusColor = 'var(--text-secondary)';
+                        
+                        const limit = acc.usage?.limit ?? 0;
+                        const current = acc.usage?.current ?? 0;
+                        const percent = limit > 0 ? Math.round((current / limit) * 100) : 0;
+                        
+                        tr.innerHTML = \`
+                         <td>
+                           <div style="font-weight: 500">\${acc.email || 'Unknown'}</div>
+                           <div class="muted" style="font-size: 0.75rem">\${acc.id}</div>
+                         </td>
+                         <td>
+                           <span class="status-badge" style="background: color-mix(in srgb, \${statusColor} 10%, transparent); color: \${statusColor}">
+                              \${acc.status || 'Active'}
+                           </span>
+                           <div class="muted" style="font-size: 0.75rem; margin-top: 4px;">
+                              \${current} / \${limit} (\${percent}%)
+                           </div>
+                         </td>
+                         <td><button class="btn btn-danger" style="padding: 4px 8px; font-size: 0.75rem" data-id="\${acc.id}">\${t('remove')}</button></td>
+                        \`;
+                        tr.querySelector('button').onclick = async () => {
+                          if(!confirm(t('confirmDelete'))) return;
+                          await fetch('/admin/account?id=' + encodeURIComponent(acc.id), { method: 'DELETE', headers: headers() });
+                          await loadData();
+                        };
+                        tbody.appendChild(tr);
+                      });
             }
+            
+            updateDashboard(data.accounts);
+            
         } catch (e) {
             console.error(e);
         }
+      }
+
+      function updateDashboard(accounts) {
+        if (!accounts) return;
+        
+        const total = accounts.length;
+        const active = accounts.filter(a => !a.status || a.status === 'active' || a.status === 'Active').length;
+        const banned = accounts.filter(a => a.status === 'error' || a.status === 'disabled').length;
+        const expiring = accounts.filter(a => a.status === 'expired').length;
+
+        
+        const grid = document.getElementById('dashboard-grid');
+        grid.innerHTML = \`
+            <div class="stat-card" style="border-left: 4px solid var(--primary);">
+                <div class="stat-icon" style="background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary);">
+                    👥
+                </div>
+                <div class="stat-content">
+                    <span class="stat-value">\${total}</span>
+                    <span class="stat-label">\${t('totalAccounts')}</span>
+                </div>
+            </div>
+            <div class="stat-card" style="border-left: 4px solid #10b981;">
+                <div class="stat-icon" style="background: color-mix(in srgb, #10b981 10%, transparent); color: #10b981;">
+                    ✅
+                </div>
+                <div class="stat-content">
+                    <span class="stat-value">\${active}</span>
+                    <span class="stat-label">\${t('activeAccounts')}</span>
+                </div>
+            </div>
+             <div class="stat-card" style="border-left: 4px solid #ef4444;">
+                <div class="stat-icon" style="background: color-mix(in srgb, #ef4444 10%, transparent); color: #ef4444;">
+                    ⚠️
+                </div>
+                <div class="stat-content">
+                    <span class="stat-value">\${banned}</span>
+                    <span class="stat-label">\${t('banned')}</span>
+                </div>
+            </div>
+             <div class="stat-card" style="border-left: 4px solid #f59e0b;">
+                <div class="stat-icon" style="background: color-mix(in srgb, #f59e0b 10%, transparent); color: #f59e0b;">
+                    🕒
+                </div>
+                <div class="stat-content">
+                    <span class="stat-value">\${expiring}</span>
+                    <span class="stat-label">\${t('expiringSoon')}</span>
+                </div>
+            </div>
+        \`;
+        
+        // Detailed Credit Stats
+        let totalLimit = 0;
+        let totalUsage = 0;
+        
+        accounts.forEach(acc => {
+           if (acc.status !== 'error' && acc.status !== 'disabled') {
+               totalLimit += (acc.usage?.limit ?? 0);
+               totalUsage += (acc.usage?.current ?? 0);
+           }
+        });
+        
+        const remaining = totalLimit - totalUsage;
+        const rate = totalLimit > 0 ? (totalUsage / totalLimit * 100) : 0;
+        
+        document.getElementById('credit-stats-card').style.display = 'block';
+        document.getElementById('dash-total-limit').textContent = totalLimit.toLocaleString();
+        document.getElementById('dash-used').textContent = totalUsage.toLocaleString();
+        document.getElementById('dash-remaining').textContent = remaining.toLocaleString();
+        document.getElementById('dash-rate').textContent = rate.toFixed(1) + '%';
+        
+        document.getElementById('dash-progress-text').textContent = \`\${totalUsage.toLocaleString()} / \${totalLimit.toLocaleString()}\`;
+        document.getElementById('dash-progress-bar').style.width = Math.min(rate, 100) + '%';
+        
+        if (rate > 90) document.getElementById('dash-progress-bar').style.background = '#ef4444';
+        else if (rate > 70) document.getElementById('dash-progress-bar').style.background = '#f59e0b';
+        else document.getElementById('dash-progress-bar').style.background = 'var(--primary)';
       }
 
       async function updateProxy() {
@@ -1122,52 +1497,16 @@ export function startKiroProxyServer(options: ProxyOptions) {
           })
           const created = Math.floor(Date.now() / 1000)
           let openaiId = `chatcmpl_${Date.now()}`
-          let roleSent = false
 
           for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
             if (!chunk) continue
-            if (chunk.type === 'message_start') {
-              openaiId = chunk?.message?.id || openaiId
-              if (!roleSent) {
-                res.write(
-                  `data: ${JSON.stringify(
-                    buildOpenAIStreamChunk(openaiId, model, created, { role: 'assistant' }, null)
-                  )}\n\n`
-                )
-                roleSent = true
-              }
-              continue
+            if (chunk.type === 'message_start' && chunk.message?.id) {
+              openaiId = chunk.message.id
             }
-
-            if (chunk.type === 'content_block_delta') {
-              const text = chunk?.delta?.text
-              if (text) {
-                if (!roleSent) {
-                  res.write(
-                    `data: ${JSON.stringify(
-                      buildOpenAIStreamChunk(openaiId, model, created, { role: 'assistant' }, null)
-                    )}\n\n`
-                  )
-                  roleSent = true
-                }
-                res.write(
-                  `data: ${JSON.stringify(
-                    buildOpenAIStreamChunk(openaiId, model, created, { content: text }, null)
-                  )}\n\n`
-                )
-              }
-              continue
-            }
-
-            if (chunk.type === 'message_delta') {
-              const hasStop = Boolean(chunk?.delta?.stop_reason)
-              if (hasStop) {
-                res.write(
-                  `data: ${JSON.stringify(
-                    buildOpenAIStreamChunk(openaiId, model, created, {}, 'stop')
-                  )}\n\n`
-                )
-              }
+            const openaiChunks = convertClaudeStreamChunkToOpenAIChunks(chunk, model, openaiId, created)
+            if (!openaiChunks || openaiChunks.length === 0) continue
+            for (const openaiChunk of openaiChunks) {
+              res.write(`data: ${JSON.stringify(openaiChunk)}\n\n`)
             }
           }
 

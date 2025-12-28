@@ -82,6 +82,13 @@ const api = {
     }
   },
 
+  // 监听账号数据更新（例如从网页端导入）
+  onAccountsUpdated: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('accounts-updated', handler)
+    return () => ipcRenderer.removeListener('accounts-updated', handler)
+  },
+
   // 后台批量检查账号状态（不刷新 Token）
   backgroundBatchCheck: (accounts: Array<{
     id: string
@@ -365,7 +372,7 @@ const api = {
   },
 
   // ============ 自动更新 ============
-  
+
   // 检查更新 (electron-updater)
   checkForUpdates: (): Promise<{
     hasUpdate: boolean

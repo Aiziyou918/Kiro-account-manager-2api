@@ -79,7 +79,7 @@ interface StatusResult {
     userStatus?: string // 用户状态：Active 等
     featureFlags?: string[] // 特性开关
     subscriptionTitle?: string
-    usage?: { 
+    usage?: {
       current: number
       limit: number
       percentUsed: number
@@ -93,7 +93,7 @@ interface StatusResult {
       nextResetDate?: string
       resourceDetail?: ResourceDetail
     }
-    subscription?: { 
+    subscription?: {
       type: string
       title?: string
       rawType?: string
@@ -123,14 +123,13 @@ interface KiroApi {
   saveAccounts: (data: AccountData) => Promise<void>
   refreshAccountToken: (account: unknown) => Promise<RefreshResult>
   checkAccountStatus: (account: unknown) => Promise<StatusResult>
-  
+
   // 后台批量刷新（主进程执行，不阻塞 UI）
   backgroundBatchRefresh: (accounts: Array<{
     id: string
     email: string
     credentials: {
       refreshToken: string
-      clientId?: string
       clientSecret?: string
       region?: string
       authMethod?: string
@@ -139,7 +138,8 @@ interface KiroApi {
   }>, concurrency?: number) => Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }>
   onBackgroundRefreshProgress: (callback: (data: { completed: number; total: number; success: number; failed: number }) => void) => () => void
   onBackgroundRefreshResult: (callback: (data: { id: string; success: boolean; data?: unknown; error?: string }) => void) => () => void
-  
+  onAccountsUpdated: (callback: () => void) => () => void
+
   // 后台批量检查账号状态（不刷新 Token）
   backgroundBatchCheck: (accounts: Array<{
     id: string
@@ -157,7 +157,7 @@ interface KiroApi {
   }>, concurrency?: number) => Promise<{ success: boolean; completed: number; successCount: number; failedCount: number }>
   onBackgroundCheckProgress: (callback: (data: { completed: number; total: number; success: number; failed: number }) => void) => () => void
   onBackgroundCheckResult: (callback: (data: { id: string; success: boolean; data?: unknown; error?: string }) => void) => () => void
-  
+
   // 切换账号 - 写入凭证到本地 SSO 缓存
   switchAccount: (credentials: {
     accessToken: string
@@ -197,7 +197,7 @@ interface KiroApi {
         upgradeCapability?: string
         overageCapability?: string
       }
-      usage: { 
+      usage: {
         current: number
         limit: number
         baseLimit?: number

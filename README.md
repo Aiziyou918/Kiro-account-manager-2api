@@ -17,11 +17,11 @@
 
 本分支在原版基础上增加了轻量级后台和反代功能：
 
-- **本地 HTTP 代理**: 兼容 OpenAI/Claude 格式，提供 `/v1/chat/completions`, `/v1/messages`, 和 `/v1/models` 接口
+- **本地 HTTP 代理**: 兼容 OpenAI/Claude 格式，提供 `/v1/chat/completions` (支持流式输出 stream), `/v1/messages`, 和 `/v1/models` 接口
 - **负载均衡**: 支持账号轮询池，请求失败自动冷却，并在恢复后自动重新加入
 - **可视化配置**: 支持在 UI 设置中配置代理端口和 API Key
-- **无缝集成**: 复用现有的账号存储和自动刷新逻辑
-- **Web 管理后台**: 提供轻量级 Web 界面 `/admin`，支持远程管理账号和导入 OIDC 凭证
+- **无缝集成**: 复用现有的账号存储和自动刷新逻辑，网页端导入账号后主程序即时同步
+- **Web 管理后台**: 提供功能丰富的 Web 界面 `/admin`，支持远程管理
 
 ### 🚀 快速开始
 
@@ -33,13 +33,22 @@
 curl http://127.0.0.1:3001/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <API_KEY>" \
-  -d '{"model":"claude-opus-4-5","messages":[{"role":"user","content":"Hello"}],"stream":false}'
+  -d '{"model":"claude-opus-4-5","messages":[{"role":"user","content":"Hello"}],"stream":true}'
 ```
 
-### 🌐 Web 管理后台
+### 🌐 Web 管理后台 (增强版)
 
-- 浏览器访问 `http://<server-ip>:<port>/admin`
-- 支持管理账号列表、配置代理参数、导入 OIDC 凭证（支持拖拽两个 JSON 文件导入）
+- **访问地址**: `http://<server-ip>:<port>/admin`
+- **数据看板 (Dashboard)**:
+    - 实时展示总账号数、活跃账号、已封禁和即将过期账号统计
+    - **额度统计**: 可视化展示总额度、已用额度、剩余额度及使用率进度条
+- **自动化管理**:
+    - **自动轮询**: 页面数据每 5 秒自动刷新，实时监控账号状态
+    - **多语言支持**: 内置中/英双语切换
+- **功能**:
+    - 远程导入 OIDC 凭证（支持拖拽文件），主程序界面自动同步刷新
+    - 远程删除无效账号
+    - 在线修改代理配置（端口、API Key、开关）
 
 ---
 

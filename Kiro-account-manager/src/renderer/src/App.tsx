@@ -42,6 +42,17 @@ function App(): React.JSX.Element {
     }
   }, [handleBackgroundCheckResult])
 
+  // 监听账号数据更新（例如从网页端导入）
+  useEffect(() => {
+    const unsubscribe = window.api.onAccountsUpdated(() => {
+      console.log('[App] Received accounts-updated signal, reloading...')
+      loadFromStorage()
+    })
+    return () => {
+      unsubscribe()
+    }
+  }, [loadFromStorage])
+
   const renderPage = () => {
     switch (currentPage) {
       case 'home':

@@ -54,31 +54,31 @@ export function HomePage() {
   }, [accounts])
 
   const statCards = [
-    { 
-      label: '总账号数', 
-      value: stats.total, 
-      icon: Users, 
+    {
+      label: '总账号数',
+      value: stats.total,
+      icon: Users,
       color: 'text-blue-500',
       bgColor: 'bg-blue-500/10'
     },
-    { 
-      label: '正常账号', 
-      value: stats.activeCount, 
-      icon: CheckCircle, 
+    {
+      label: '正常账号',
+      value: stats.activeCount,
+      icon: CheckCircle,
       color: 'text-green-500',
       bgColor: 'bg-green-500/10'
     },
-    { 
-      label: '已封禁', 
-      value: stats.byStatus?.error || 0, 
-      icon: AlertTriangle, 
+    {
+      label: '已封禁',
+      value: stats.byStatus?.error || 0,
+      icon: AlertTriangle,
       color: 'text-red-500',
       bgColor: 'bg-red-500/10'
     },
-    { 
-      label: '即将过期', 
-      value: stats.expiringSoonCount, 
-      icon: Clock, 
+    {
+      label: '即将过期',
+      value: stats.expiringSoonCount,
+      icon: Clock,
       color: 'text-amber-500',
       bgColor: 'bg-amber-500/10'
     },
@@ -94,10 +94,10 @@ export function HomePage() {
         <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-primary/20 to-transparent rounded-full blur-2xl" />
         <div className="absolute bottom-0 left-0 w-24 h-24 bg-gradient-to-tr from-primary/20 to-transparent rounded-full blur-2xl" />
         <div className="relative flex items-center gap-4">
-          <img 
-            src={kiroLogo} 
-            alt="Kiro" 
-            className={cn("h-14 w-auto transition-all", darkMode && "invert brightness-0")} 
+          <img
+            src={kiroLogo}
+            alt="Kiro"
+            className={cn("h-14 w-auto transition-all", darkMode && "invert brightness-0")}
           />
           <div>
             <h1 className="text-2xl font-bold text-primary">欢迎使用 Kiro 账户管理器</h1>
@@ -180,7 +180,7 @@ export function HomePage() {
                 <span>{usageStats.totalUsed.toLocaleString()} / {usageStats.totalLimit.toLocaleString()}</span>
               </div>
               <div className="h-3 bg-muted rounded-full overflow-hidden">
-                <div 
+                <div
                   className={cn(
                     "h-full rounded-full transition-all",
                     usageStats.percentUsed < 50 && "bg-green-500",
@@ -238,14 +238,13 @@ export function HomePage() {
                   {activeAccount.usage?.current || 0} / {activeAccount.usage?.limit || 0}
                 </p>
                 <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                  <div 
-                    className={`h-full rounded-full transition-all ${
-                      (activeAccount.usage?.percentUsed || 0) > 0.8 
-                        ? 'bg-red-500' 
-                        : (activeAccount.usage?.percentUsed || 0) > 0.5 
-                          ? 'bg-amber-500' 
+                  <div
+                    className={`h-full rounded-full transition-all ${(activeAccount.usage?.percentUsed || 0) > 0.8
+                        ? 'bg-red-500'
+                        : (activeAccount.usage?.percentUsed || 0) > 0.5
+                          ? 'bg-amber-500'
                           : 'bg-green-500'
-                    }`}
+                      }`}
                     style={{ width: `${Math.min((activeAccount.usage?.percentUsed || 0) * 100, 100)}%` }}
                   />
                 </div>
@@ -255,7 +254,7 @@ export function HomePage() {
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">订阅剩余</p>
                 <p className="text-sm font-medium">
-                  {activeAccount.subscription?.daysRemaining != null 
+                  {activeAccount.subscription?.daysRemaining != null
                     ? `${activeAccount.subscription.daysRemaining} 天`
                     : '永久'}
                 </p>
@@ -281,7 +280,7 @@ export function HomePage() {
               <div className="space-y-1">
                 <p className="text-xs text-muted-foreground">登录方式</p>
                 <p className="text-sm font-medium">
-                  {activeAccount.credentials?.authMethod === 'social' 
+                  {activeAccount.credentials?.authMethod === 'social'
                     ? (activeAccount.credentials?.provider || 'Social')
                     : 'Builder ID'}
                 </p>
