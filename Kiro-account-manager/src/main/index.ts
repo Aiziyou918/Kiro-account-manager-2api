@@ -736,7 +736,12 @@ async function addAccountFromOidcFiles(
   store!.set('accountData', data)
   lastSavedData = data
 
-  mainWindow?.webContents.send('accounts-updated')
+  console.log('[Main] Account saved, broadcasting accounts-updated to all windows...')
+  BrowserWindow.getAllWindows().forEach((win) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('accounts-updated')
+    }
+  })
 
   return { id: account.id, email: account.email }
 }
@@ -748,7 +753,12 @@ async function deleteAccountById(id: string) {
     delete data.accounts[id]
     store!.set('accountData', data)
     lastSavedData = data
-    mainWindow?.webContents.send('accounts-updated')
+    console.log('[Main] Account deleted, broadcasting accounts-updated to all windows...')
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('accounts-updated')
+      }
+    })
   }
 }
 
