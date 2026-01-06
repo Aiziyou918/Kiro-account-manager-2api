@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { AccountManager } from './components/accounts'
 import { Sidebar, type PageType } from './components/layout'
 import { HomePage, AboutPage, SettingsPage, MachineIdPage, KiroSettingsPage } from './components/pages'
-import { UpdateDialog } from './components/UpdateDialog'
 import { useAccountsStore } from './store/accounts'
 
 function App(): React.JSX.Element {
@@ -83,7 +82,6 @@ function App(): React.JSX.Element {
       <main className="flex-1 overflow-auto">
         {renderPage()}
       </main>
-      <UpdateDialog />
     </div>
   )
 }

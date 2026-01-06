@@ -19,6 +19,7 @@ type Account = {
   credentials: AccountCredentials
   status?: string
   lastError?: string
+  quotaExhaustedUntil?: number
 }
 
 type AccountData = {
@@ -39,10 +40,12 @@ type ProxyOptions = {
   getAccountData: () => Promise<AccountData | null>
   refreshAccountToken: (account: Account) => Promise<RefreshResult>
   updateAccountCredentials: (id: string, creds: Partial<AccountCredentials>) => Promise<void>
+  updateAccountStatus?: (id: string, updates: { status?: string; lastError?: string; quotaExhaustedUntil?: number | null }) => Promise<void>
   getAdminData?: () => Promise<{ accounts: Array<{ id: string; email: string; status?: string }>; proxy: { enabled: boolean; port: number; apiKeySet: boolean } }>
   setProxyConfig?: (config: { enabled: boolean; port: number; apiKey?: string }) => Promise<void>
   addAccountFromOidcFiles?: (tokenFile: Record<string, unknown>, clientFile: Record<string, unknown>) => Promise<{ id: string; email: string }>
   deleteAccount?: (id: string) => Promise<void>
+  refreshUsageForAvailableAccounts?: () => Promise<{ updated: number; failed: number; total: number }>
   logger?: Pick<Console, 'log' | 'warn' | 'error'>
 }
 
@@ -77,6 +80,32 @@ function normalizeTextContent(content: any): string {
       .join('')
   }
   return ''
+}
+
+function estimateTokenCount(requestBody: any): number {
+  let totalChars = 0
+  if (requestBody?.system) {
+    totalChars += normalizeTextContent(requestBody.system).length
+  }
+  if (Array.isArray(requestBody?.messages)) {
+    for (const message of requestBody.messages) {
+      totalChars += normalizeTextContent(message?.content ?? message).length
+    }
+  }
+  if (Array.isArray(requestBody?.tools)) {
+    totalChars += JSON.stringify(requestBody.tools).length
+  }
+  return Math.ceil(totalChars / 4)
+}
+
+function buildContextWarning(tokenEstimate: number): string | null {
+  if (tokenEstimate >= 24000) {
+    return 'Context length is very large and may exceed limits. Consider compacting or starting a new chat.'
+  }
+  if (tokenEstimate >= 16000) {
+    return 'Context is near the limit. Consider compacting or starting a new chat soon.'
+  }
+  return null
 }
 
 function claudeToOpenAIResponse(claudeMessage: any) {
@@ -250,6 +279,11 @@ function convertClaudeStreamChunkToOpenAIChunks(
 
 function isTokenNearExpiry(expiresAt: number, refreshBeforeExpiryMs: number) {
   return expiresAt && Date.now() + refreshBeforeExpiryMs >= expiresAt
+}
+
+function getNextMonthStartMs(now = Date.now()) {
+  const date = new Date(now)
+  return new Date(date.getFullYear(), date.getMonth() + 1, 1, 0, 0, 0, 0).getTime()
 }
 
 function parseBody(req: http.IncomingMessage): Promise<any> {
@@ -649,6 +683,9 @@ function renderAdminPage() {
             <span style="background: var(--surface-2); padding: 6px; border-radius: 8px; display: inline-flex;">📊</span> 
             <span data-i18n="creditStats">Credit Statistics</span>
             <span id="credit-stats-subtitle" class="muted" style="font-size: 0.8rem; font-weight: 400; margin-left: 0.5rem;">(based on active accounts)</span>
+            <button class="btn btn-ghost" id="refresh-usage-btn" onclick="refreshUsage()" data-i18n="refreshUsage" style="margin-left: auto;">
+              Refresh Usage
+            </button>
          </h2>
          <div class="grid" style="gap: 2rem;">
             <div style="background: var(--surface-2); padding: 1.25rem; border-radius: 12px;">
@@ -834,6 +871,10 @@ function renderAdminPage() {
           totalUsage: "Total Usage",
 
           creditStats: "Credit Statistics",
+          refreshUsage: "Refresh Usage",
+          refreshingUsage: "Refreshing...",
+          refreshUsageDone: "Usage Refreshed",
+          refreshUsageFailed: "Failed to refresh usage",
           used: "Used",
           remaining: "Remaining",
           usageRate: "Usage Rate",
@@ -897,6 +938,10 @@ function renderAdminPage() {
           totalUsage: "已用额度",
 
           creditStats: "额度统计",
+          refreshUsage: "刷新用量",
+          refreshingUsage: "刷新中...",
+          refreshUsageDone: "用量已更新",
+          refreshUsageFailed: "刷新失败",
           used: "已使用",
           remaining: "剩余额度",
           usageRate: "使用率",
@@ -1221,6 +1266,29 @@ function renderAdminPage() {
         else document.getElementById('dash-progress-bar').style.background = 'var(--primary)';
       }
 
+      async function refreshUsage() {
+        const btn = document.getElementById('refresh-usage-btn');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = t('refreshingUsage');
+        try {
+          const res = await fetch('/admin/usage/refresh', { method: 'POST', headers: headers() });
+          const result = await res.json();
+          if (!res.ok) {
+            throw new Error(result?.error || 'Failed');
+          }
+          await loadData();
+          btn.textContent = t('refreshUsageDone');
+        } catch (e) {
+          alert(t('refreshUsageFailed'));
+          btn.textContent = t('refreshUsage');
+        }
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.textContent = t('refreshUsage');
+        }, 1500);
+      }
+
       async function updateProxy() {
         const payload = {
           enabled: document.getElementById('proxyEnabled').checked,
@@ -1332,6 +1400,16 @@ export function startKiroProxyServer(options: ProxyOptions) {
       }
       return sendJson(res, 200, { ok: true })
     }
+    if (req.method === 'POST' && url.pathname === '/admin/usage/refresh') {
+      if (!isAuthorized(req, apiKey)) {
+        return sendJson(res, 401, { error: 'Unauthorized' })
+      }
+      if (!options.refreshUsageForAvailableAccounts) {
+        return sendJson(res, 400, { error: 'Refresh usage not supported' })
+      }
+      const result = await options.refreshUsageForAvailableAccounts()
+      return sendJson(res, 200, { ok: true, ...result })
+    }
     if (req.method === 'POST' && url.pathname === '/admin/account') {
       if (!isAuthorized(req, apiKey)) {
         return sendJson(res, 401, { error: 'Unauthorized' })
@@ -1405,6 +1483,8 @@ export function startKiroProxyServer(options: ProxyOptions) {
     } catch {
       return sendJson(res, 400, { error: 'Invalid JSON body' })
     }
+    const tokenEstimate = estimateTokenCount(requestBody)
+    const contextWarning = buildContextWarning(tokenEstimate)
 
     const isOpenAI = url.pathname === '/v1/chat/completions'
     const isClaude = url.pathname === '/v1/messages'
@@ -1422,20 +1502,38 @@ export function startKiroProxyServer(options: ProxyOptions) {
     }
 
     const now = Date.now()
-    const eligible = accounts.filter((account) => {
+    const eligible: Account[] = []
+    for (const account of accounts) {
       const disabled = disabledUntil.get(account.id)
-      if (!disabled) return true
-      if (disabled <= now) {
-        disabledUntil.delete(account.id)
-        return true
+      if (disabled && disabled > now) {
+        continue
       }
-      return false
-    })
+      if (disabled && disabled <= now) {
+        disabledUntil.delete(account.id)
+      }
+      if (account.status === 'quota_exhausted' && account.quotaExhaustedUntil) {
+        if (account.quotaExhaustedUntil > now) {
+          continue
+        }
+        account.status = 'active'
+        account.quotaExhaustedUntil = undefined
+        if (options.updateAccountStatus) {
+          await options.updateAccountStatus(account.id, {
+            status: 'active',
+            quotaExhaustedUntil: null,
+            lastError: ''
+          })
+        }
+      }
+      eligible.push(account)
+    }
 
     if (eligible.length === 0) {
       return sendJson(res, 503, { error: 'No healthy accounts available' })
     }
 
+    const isStreamRequest = Boolean(requestBody?.stream)
+    let streamStarted = false
     let lastError: string | undefined
     for (let attempt = 0; attempt < eligible.length; attempt++) {
       const account = eligible[rrIndex % eligible.length]
@@ -1480,6 +1578,11 @@ export function startKiroProxyServer(options: ProxyOptions) {
               'cache-control': 'no-cache',
               connection: 'keep-alive'
             })
+            streamStarted = true
+            if (contextWarning) {
+              res.write(`event: warning\n`)
+              res.write(`data: ${JSON.stringify({ message: contextWarning, tokenEstimate })}\n\n`)
+            }
             for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
               const eventType = chunk?.type || 'message'
               res.write(`event: ${eventType}\n`)
@@ -1495,8 +1598,22 @@ export function startKiroProxyServer(options: ProxyOptions) {
             'cache-control': 'no-cache',
             connection: 'keep-alive'
           })
+          streamStarted = true
           const created = Math.floor(Date.now() / 1000)
           let openaiId = `chatcmpl_${Date.now()}`
+
+          if (contextWarning) {
+            res.write(
+              `data: ${JSON.stringify(
+                buildOpenAIStreamChunk(openaiId, model, created, { role: 'assistant' }, null)
+              )}\n\n`
+            )
+            res.write(
+              `data: ${JSON.stringify(
+                buildOpenAIStreamChunk(openaiId, model, created, { content: `[Warning] ${contextWarning}` }, null)
+              )}\n\n`
+            )
+          }
 
           for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
             if (!chunk) continue
@@ -1517,17 +1634,61 @@ export function startKiroProxyServer(options: ProxyOptions) {
 
         const result = await kiroService.generateContent(model, requestBody)
         if (isOpenAI) {
-          return sendJson(res, 200, claudeToOpenAIResponse(result))
+          const payload: any = claudeToOpenAIResponse(result)
+          if (contextWarning) payload.warning = contextWarning
+          return sendJson(res, 200, payload)
         }
-        return sendJson(res, 200, result)
+        const payload = contextWarning ? { ...result, warning: contextWarning } : result
+        return sendJson(res, 200, payload)
       } catch (error: any) {
         lastError = error?.message || String(error)
-        disabledUntil.set(account.id, Date.now() + cooldownMs)
-        logger.warn(`[Proxy] Account ${account.email} failed, cooldown ${cooldownMs}ms: ${lastError}`)
+        const statusCode = error?.response?.status
+        if (statusCode === 400) {
+          const errPayload: any = { error: lastError || 'Bad Request' }
+          if (contextWarning) {
+            errPayload.warning = contextWarning
+            errPayload.tokenEstimate = tokenEstimate
+          }
+          logger.warn(`[Proxy] Request rejected (400): ${lastError}`)
+          if (isStreamRequest || streamStarted || res.headersSent) {
+            if (!res.writableEnded) {
+              res.end()
+            }
+            return
+          }
+          return sendJson(res, 400, errPayload)
+        }
+        if (statusCode === 402) {
+          const resetAt = getNextMonthStartMs()
+          disabledUntil.set(account.id, resetAt)
+          account.status = 'quota_exhausted'
+          account.quotaExhaustedUntil = resetAt
+          if (options.updateAccountStatus) {
+            await options.updateAccountStatus(account.id, {
+              status: 'quota_exhausted',
+              quotaExhaustedUntil: resetAt,
+              lastError
+            })
+          }
+          logger.warn(
+            `[Proxy] Account ${account.email} quota exhausted, disabled until ${new Date(resetAt).toISOString()}`
+          )
+        } else {
+          disabledUntil.set(account.id, Date.now() + cooldownMs)
+          logger.warn(`[Proxy] Account ${account.email} failed, cooldown ${cooldownMs}ms: ${lastError}`)
+        }
+        if (isStreamRequest || streamStarted || res.headersSent) {
+          if (!res.writableEnded) {
+            res.end()
+          }
+          return
+        }
       }
     }
 
-    return sendJson(res, 502, { error: lastError || 'Upstream failure' })
+    if (!res.headersSent) {
+      return sendJson(res, 502, { error: lastError || 'Upstream failure' })
+    }
   })
 
   server.listen(port, '0.0.0.0', () => {

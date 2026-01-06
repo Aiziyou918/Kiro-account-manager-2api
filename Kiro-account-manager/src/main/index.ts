@@ -1,5 +1,4 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
-import { autoUpdater } from 'electron-updater'
 import * as machineIdModule from './machineId'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -8,61 +7,6 @@ import { encode, decode } from 'cbor-x'
 import icon from '../../resources/icon.png?asset'
 import { startKiroProxyServer } from './kiro/proxy-server'
 import { randomUUID } from 'crypto'
-
-// ============ 自动更新配置 ============
-autoUpdater.autoDownload = false
-autoUpdater.autoInstallOnAppQuit = true
-
-function setupAutoUpdater(): void {
-  // 检查更新出错
-  autoUpdater.on('error', (error) => {
-    console.error('[AutoUpdater] Error:', error)
-    mainWindow?.webContents.send('update-error', error.message)
-  })
-
-  // 检查更新中
-  autoUpdater.on('checking-for-update', () => {
-    console.log('[AutoUpdater] Checking for update...')
-    mainWindow?.webContents.send('update-checking')
-  })
-
-  // 有可用更新
-  autoUpdater.on('update-available', (info) => {
-    console.log('[AutoUpdater] Update available:', info.version)
-    mainWindow?.webContents.send('update-available', {
-      version: info.version,
-      releaseDate: info.releaseDate,
-      releaseNotes: info.releaseNotes
-    })
-  })
-
-  // 没有可用更新
-  autoUpdater.on('update-not-available', (info) => {
-    console.log('[AutoUpdater] No update available, current:', info.version)
-    mainWindow?.webContents.send('update-not-available', { version: info.version })
-  })
-
-  // 下载进度
-  autoUpdater.on('download-progress', (progress) => {
-    console.log(`[AutoUpdater] Download progress: ${progress.percent.toFixed(1)}%`)
-    mainWindow?.webContents.send('update-download-progress', {
-      percent: progress.percent,
-      bytesPerSecond: progress.bytesPerSecond,
-      transferred: progress.transferred,
-      total: progress.total
-    })
-  })
-
-  // 下载完成
-  autoUpdater.on('update-downloaded', (info) => {
-    console.log('[AutoUpdater] Update downloaded:', info.version)
-    mainWindow?.webContents.send('update-downloaded', {
-      version: info.version,
-      releaseDate: info.releaseDate,
-      releaseNotes: info.releaseNotes
-    })
-  })
-}
 
 // ============ Kiro API 调用 ============
 const KIRO_API_BASE = 'https://app.kiro.dev/service/KiroWebPortalService/operation'
@@ -585,6 +529,30 @@ async function updateAccountCredentialsInStore(
   lastSavedData = data
 }
 
+async function updateAccountStatusInStore(
+  accountId: string,
+  updates: Partial<{
+    status: string
+    lastError: string
+    quotaExhaustedUntil: number | null
+  }>
+): Promise<void> {
+  await initStore()
+  const data = (store!.get('accountData', null) as any) || {}
+  if (!data.accounts || !data.accounts[accountId]) return
+  data.accounts[accountId] = {
+    ...data.accounts[accountId],
+    status: updates.status ?? data.accounts[accountId].status,
+    lastError: updates.lastError ?? data.accounts[accountId].lastError,
+    quotaExhaustedUntil:
+      updates.quotaExhaustedUntil === null
+        ? undefined
+        : updates.quotaExhaustedUntil ?? data.accounts[accountId].quotaExhaustedUntil
+  }
+  store!.set('accountData', data)
+  lastSavedData = data
+}
+
 async function refreshAccountTokenForProxy(account: any): Promise<{
   accessToken: string
   refreshToken?: string
@@ -647,6 +615,163 @@ function buildUsageFromResponse(rawUsage: any) {
     freeTrialExpiry,
     nextResetDate: rawUsage?.nextDateReset
   }
+}
+
+function isAccountAvailableForUsageRefresh(account: any) {
+  const status = String(account?.status || '').toLowerCase()
+  if (!status) return true
+  const blocked = new Set(['error', 'disabled', 'expired', 'quota_exhausted', 'banned', 'suspended'])
+  return !blocked.has(status)
+}
+
+async function refreshUsageForAccount(account: any) {
+  const { accessToken, refreshToken, clientId, clientSecret, region, authMethod, provider } =
+    account.credentials || {}
+
+  if (!accessToken && !refreshToken) {
+    throw new Error('Missing accessToken/refreshToken')
+  }
+
+  let idp = 'BuilderId'
+  if (authMethod === 'social') {
+    idp = provider || account.idp || 'BuilderId'
+  } else if (provider) {
+    idp = provider
+  } else if (account.idp) {
+    idp = account.idp
+  }
+
+  const fetchUsage = async (token: string) => {
+    const [userInfo, usage] = await Promise.all([
+      getUserInfo(token, idp).catch(() => undefined),
+      kiroApiRequest<any>('GetUserUsageAndLimits', { isEmailRequired: true, origin: 'KIRO_IDE' }, token, idp)
+    ])
+    return { userInfo, usage }
+  }
+
+  const canRefresh = refreshToken && (authMethod === 'social' || (clientId && clientSecret))
+  let newCredentials: { accessToken: string; refreshToken?: string; expiresAt?: number } | undefined
+
+  try {
+    if (!accessToken && !canRefresh) {
+      throw new Error('Missing accessToken')
+    }
+    if (!accessToken && canRefresh) {
+      const refreshResult = await refreshTokenByMethod(
+        refreshToken,
+        clientId || '',
+        clientSecret || '',
+        region || 'us-east-1',
+        authMethod
+      )
+
+      if (!refreshResult.success || !refreshResult.accessToken) {
+        throw new Error(refreshResult.error || 'Token refresh failed')
+      }
+
+      newCredentials = {
+        accessToken: refreshResult.accessToken,
+        refreshToken: refreshResult.refreshToken || refreshToken,
+        expiresAt: Date.now() + (refreshResult.expiresIn ?? 3600) * 1000
+      }
+
+      const { userInfo, usage } = await fetchUsage(refreshResult.accessToken)
+      return { userInfo, usage, newCredentials }
+    }
+
+    const { userInfo, usage } = await fetchUsage(accessToken)
+    return { userInfo, usage, newCredentials }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    if (errorMsg.includes('401') && canRefresh) {
+      const refreshResult = await refreshTokenByMethod(
+        refreshToken,
+        clientId || '',
+        clientSecret || '',
+        region || 'us-east-1',
+        authMethod
+      )
+
+      if (!refreshResult.success || !refreshResult.accessToken) {
+        throw new Error(refreshResult.error || 'Token refresh failed')
+      }
+
+      newCredentials = {
+        accessToken: refreshResult.accessToken,
+        refreshToken: refreshResult.refreshToken || refreshToken,
+        expiresAt: Date.now() + (refreshResult.expiresIn ?? 3600) * 1000
+      }
+
+      const { userInfo, usage } = await fetchUsage(refreshResult.accessToken)
+      return { userInfo, usage, newCredentials }
+    }
+    throw error
+  }
+}
+
+async function refreshUsageForAvailableAccounts(): Promise<{ updated: number; failed: number; total: number }> {
+  await initStore()
+  const data = (await getStoredAccountData()) || {}
+  const accountsObj = data.accounts || {}
+  const accounts = Object.values(accountsObj)
+  const targets = accounts.filter(isAccountAvailableForUsageRefresh)
+
+  let updated = 0
+  let failed = 0
+
+  for (const account of targets) {
+    try {
+      const { userInfo, usage, newCredentials } = await refreshUsageForAccount(account)
+      const usageData = buildUsageFromResponse(usage)
+      const derivedStatus = userInfo?.status
+        ? userInfo.status === 'Active'
+          ? 'active'
+          : 'error'
+        : account.status
+
+      const updatedAccount = {
+        ...account,
+        email: userInfo?.email || account.email,
+        userId: userInfo?.userId || account.userId,
+        status: derivedStatus,
+        usage: usageData,
+        lastError: ''
+      }
+
+      if (newCredentials) {
+        updatedAccount.credentials = {
+          ...account.credentials,
+          accessToken: newCredentials.accessToken,
+          refreshToken: newCredentials.refreshToken || account.credentials?.refreshToken,
+          expiresAt: newCredentials.expiresAt || account.credentials?.expiresAt
+        }
+      }
+
+      data.accounts[account.id] = updatedAccount
+      store!.set('accountData', data)
+      lastSavedData = data
+      updated++
+    } catch (error) {
+      failed++
+      const errorMsg = error instanceof Error ? error.message : String(error)
+      data.accounts[account.id] = {
+        ...account,
+        lastError: errorMsg
+      }
+      store!.set('accountData', data)
+      lastSavedData = data
+    }
+  }
+
+  if (updated > 0 || failed > 0) {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('accounts-updated')
+      }
+    })
+  }
+
+  return { updated, failed, total: targets.length }
 }
 
 async function addAccountFromOidcFiles(
@@ -802,10 +927,12 @@ async function startOrRestartProxyServer(config: { enabled: boolean; port: numbe
     getAccountData: getStoredAccountData,
     refreshAccountToken: refreshAccountTokenForProxy,
     updateAccountCredentials: updateAccountCredentialsInStore,
+    updateAccountStatus: updateAccountStatusInStore,
     getAdminData: getAdminDataSnapshot,
     setProxyConfig: setProxyConfigFromAdmin,
     addAccountFromOidcFiles: addAccountFromOidcFiles,
-    deleteAccount: deleteAccountById
+    deleteAccount: deleteAccountById,
+    refreshUsageForAvailableAccounts
   })
   currentProxyConfig = config
 }
@@ -943,15 +1070,6 @@ app.whenReady().then(async () => {
   // 注册自定义协议
   registerProtocol()
 
-  // 初始化自动更新（仅生产环境）
-  if (!is.dev) {
-    setupAutoUpdater()
-    // 启动后延迟检查更新
-    setTimeout(() => {
-      autoUpdater.checkForUpdates().catch(console.error)
-    }, 3000)
-  }
-
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.kiro.account-manager')
 
@@ -972,123 +1090,6 @@ app.whenReady().then(async () => {
   // IPC: 获取应用版本
   ipcMain.handle('get-app-version', () => {
     return app.getVersion()
-  })
-
-  // IPC: 检查更新
-  ipcMain.handle('check-for-updates', async () => {
-    if (is.dev) {
-      return { hasUpdate: false, message: '开发环境不支持更新检查' }
-    }
-    try {
-      const result = await autoUpdater.checkForUpdates()
-      return {
-        hasUpdate: !!result?.updateInfo,
-        version: result?.updateInfo?.version,
-        releaseDate: result?.updateInfo?.releaseDate
-      }
-    } catch (error) {
-      console.error('[AutoUpdater] Check failed:', error)
-      return { hasUpdate: false, error: error instanceof Error ? error.message : 'Unknown error' }
-    }
-  })
-
-  // IPC: 下载更新
-  ipcMain.handle('download-update', async () => {
-    if (is.dev) {
-      return { success: false, message: '开发环境不支持更新' }
-    }
-    try {
-      await autoUpdater.downloadUpdate()
-      return { success: true }
-    } catch (error) {
-      console.error('[AutoUpdater] Download failed:', error)
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' }
-    }
-  })
-
-  // IPC: 安装更新并重启
-  ipcMain.handle('install-update', () => {
-    autoUpdater.quitAndInstall(false, true)
-  })
-
-  // IPC: 手动检查更新（使用 GitHub API，用于 AboutPage）
-  const GITHUB_REPO = 'chaogei/Kiro-account-manager'
-  const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
-
-  ipcMain.handle('check-for-updates-manual', async () => {
-    try {
-      console.log('[Update] Manual check via GitHub API...')
-      const currentVersion = app.getVersion()
-
-      const response = await fetch(GITHUB_API_URL, {
-        headers: {
-          'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Kiro-Account-Manager'
-        }
-      })
-
-      if (!response.ok) {
-        if (response.status === 403) {
-          throw new Error('GitHub API 请求次数超限，请稍后再试')
-        } else if (response.status === 404) {
-          throw new Error('未找到发布版本')
-        }
-        throw new Error(`GitHub API 错误: ${response.status}`)
-      }
-
-      const release = await response.json() as {
-        tag_name: string
-        name: string
-        body: string
-        html_url: string
-        published_at: string
-        assets: Array<{
-          name: string
-          browser_download_url: string
-          size: number
-        }>
-      }
-
-      const latestVersion = release.tag_name.replace(/^v/, '')
-
-      // 比较版本号
-      const compareVersions = (v1: string, v2: string): number => {
-        const parts1 = v1.split('.').map(Number)
-        const parts2 = v2.split('.').map(Number)
-        for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
-          const p1 = parts1[i] || 0
-          const p2 = parts2[i] || 0
-          if (p1 > p2) return 1
-          if (p1 < p2) return -1
-        }
-        return 0
-      }
-
-      const hasUpdate = compareVersions(latestVersion, currentVersion) > 0
-
-      console.log(`[Update] Current: ${currentVersion}, Latest: ${latestVersion}, HasUpdate: ${hasUpdate}`)
-
-      return {
-        hasUpdate,
-        currentVersion,
-        latestVersion,
-        releaseNotes: release.body || '',
-        releaseName: release.name || `v${latestVersion}`,
-        releaseUrl: release.html_url,
-        publishedAt: release.published_at,
-        assets: release.assets.map(a => ({
-          name: a.name,
-          downloadUrl: a.browser_download_url,
-          size: a.size
-        }))
-      }
-    } catch (error) {
-      console.error('[Update] Manual check failed:', error)
-      return {
-        hasUpdate: false,
-        error: error instanceof Error ? error.message : '检查更新失败'
-      }
-    }
   })
 
   // IPC: 加载账号数据
