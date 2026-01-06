@@ -1532,7 +1532,6 @@ export function startKiroProxyServer(options: ProxyOptions) {
       return sendJson(res, 503, { error: 'No healthy accounts available' })
     }
 
-    const isStreamRequest = Boolean(requestBody?.stream)
     let streamStarted = false
     let lastError: string | undefined
     for (let attempt = 0; attempt < eligible.length; attempt++) {
@@ -1572,51 +1571,56 @@ export function startKiroProxyServer(options: ProxyOptions) {
 
         if (requestBody?.stream) {
           if (isClaude) {
-            res.writeHead(200, {
-              ...DEFAULT_HEADERS,
-              'content-type': 'text/event-stream',
-              'cache-control': 'no-cache',
-              connection: 'keep-alive'
-            })
-            streamStarted = true
-            if (contextWarning) {
-              res.write(`event: warning\n`)
-              res.write(`data: ${JSON.stringify({ message: contextWarning, tokenEstimate })}\n\n`)
-            }
             for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
+              if (!streamStarted) {
+                res.writeHead(200, {
+                  ...DEFAULT_HEADERS,
+                  'content-type': 'text/event-stream',
+                  'cache-control': 'no-cache',
+                  connection: 'keep-alive'
+                })
+                streamStarted = true
+                if (contextWarning) {
+                  res.write(`event: warning\n`)
+                  res.write(`data: ${JSON.stringify({ message: contextWarning, tokenEstimate })}\n\n`)
+                }
+              }
               const eventType = chunk?.type || 'message'
               res.write(`event: ${eventType}\n`)
               res.write(`data: ${JSON.stringify(chunk)}\n\n`)
             }
-            res.end()
+            if (streamStarted) {
+              res.end()
+            }
             return
           }
 
-          res.writeHead(200, {
-            ...DEFAULT_HEADERS,
-            'content-type': 'text/event-stream',
-            'cache-control': 'no-cache',
-            connection: 'keep-alive'
-          })
-          streamStarted = true
           const created = Math.floor(Date.now() / 1000)
           let openaiId = `chatcmpl_${Date.now()}`
 
-          if (contextWarning) {
-            res.write(
-              `data: ${JSON.stringify(
-                buildOpenAIStreamChunk(openaiId, model, created, { role: 'assistant' }, null)
-              )}\n\n`
-            )
-            res.write(
-              `data: ${JSON.stringify(
-                buildOpenAIStreamChunk(openaiId, model, created, { content: `[Warning] ${contextWarning}` }, null)
-              )}\n\n`
-            )
-          }
-
           for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
             if (!chunk) continue
+            if (!streamStarted) {
+              res.writeHead(200, {
+                ...DEFAULT_HEADERS,
+                'content-type': 'text/event-stream',
+                'cache-control': 'no-cache',
+                connection: 'keep-alive'
+              })
+              streamStarted = true
+              if (contextWarning) {
+                res.write(
+                  `data: ${JSON.stringify(
+                    buildOpenAIStreamChunk(openaiId, model, created, { role: 'assistant' }, null)
+                  )}\n\n`
+                )
+                res.write(
+                  `data: ${JSON.stringify(
+                    buildOpenAIStreamChunk(openaiId, model, created, { content: `[Warning] ${contextWarning}` }, null)
+                  )}\n\n`
+                )
+              }
+            }
             if (chunk.type === 'message_start' && chunk.message?.id) {
               openaiId = chunk.message.id
             }
@@ -1627,8 +1631,10 @@ export function startKiroProxyServer(options: ProxyOptions) {
             }
           }
 
-          res.write('data: [DONE]\n\n')
-          res.end()
+          if (streamStarted) {
+            res.write('data: [DONE]\n\n')
+            res.end()
+          }
           return
         }
 
@@ -1650,7 +1656,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
             errPayload.tokenEstimate = tokenEstimate
           }
           logger.warn(`[Proxy] Request rejected (400): ${lastError}`)
-          if (isStreamRequest || streamStarted || res.headersSent) {
+          if (streamStarted || res.headersSent) {
             if (!res.writableEnded) {
               res.end()
             }
@@ -1677,7 +1683,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
           disabledUntil.set(account.id, Date.now() + cooldownMs)
           logger.warn(`[Proxy] Account ${account.email} failed, cooldown ${cooldownMs}ms: ${lastError}`)
         }
-        if (isStreamRequest || streamStarted || res.headersSent) {
+        if (streamStarted || res.headersSent) {
           if (!res.writableEnded) {
             res.end()
           }

@@ -1175,29 +1175,32 @@ ${firstUserContent}`,
     const inputTokens = this.estimateInputTokens(requestBody)
     const messageId = uuidv4()
 
-    yield {
-      type: 'message_start',
-      message: {
-        id: messageId,
-        type: 'message',
-        role: 'assistant',
-        model: model,
-        usage: { input_tokens: inputTokens, output_tokens: 0 },
-        content: []
-      }
-    }
-
-    yield {
-      type: 'content_block_start',
-      index: 0,
-      content_block: { type: 'text', text: '' }
-    }
-
     let totalContent = ''
     const toolCalls: Array<{ toolUseId: string; name: string; input: any }> = []
     let currentToolCall: { toolUseId: string; name: string; input: string } | null = null
+    let streamStarted = false
 
     for await (const event of this.streamApiReal('POST', finalModel, requestBody)) {
+      if (!streamStarted) {
+        streamStarted = true
+        yield {
+          type: 'message_start',
+          message: {
+            id: messageId,
+            type: 'message',
+            role: 'assistant',
+            model: model,
+            usage: { input_tokens: inputTokens, output_tokens: 0 },
+            content: []
+          }
+        }
+        yield {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' }
+        }
+      }
+
       if (event.type === 'content' && event.content) {
         totalContent += event.content
         yield {
