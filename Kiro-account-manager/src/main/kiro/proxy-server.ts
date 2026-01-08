@@ -2,6 +2,46 @@ import http from 'http'
 import { URL } from 'url'
 import { KiroApiService, KIRO_MODELS, type KiroServiceConfig } from './claude-kiro'
 
+// =========================================================================
+// 支持的媒体类型
+// =========================================================================
+
+const SUPPORTED_IMAGE_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp'
+]
+
+const SUPPORTED_DOCUMENT_TYPES = [
+  'application/pdf',
+  'text/plain',
+  'text/html',
+  'text/css',
+  'text/csv',
+  'text/xml',
+  'text/markdown',
+  'text/x-python',
+  'text/javascript',
+  'application/json',
+  'application/xml',
+  'application/javascript'
+]
+
+/**
+ * 判断是否为支持的图片类型
+ */
+function isImageType(mediaType: string): boolean {
+  return SUPPORTED_IMAGE_TYPES.includes(mediaType)
+}
+
+/**
+ * 判断是否为支持的文档类型
+ */
+function isDocumentType(mediaType: string): boolean {
+  return SUPPORTED_DOCUMENT_TYPES.includes(mediaType)
+}
+
 type AccountCredentials = {
   accessToken: string
   refreshToken?: string
@@ -82,6 +122,406 @@ function normalizeTextContent(content: any): string {
   return ''
 }
 
+// =========================================================================
+// 多模态内容处理函数
+// =========================================================================
+
+/**
+ * 将 OpenAI 格式的消息内容转换为 Claude 格式
+ * 支持: text, image_url (仅 base64), image, file, document
+ * 不支持: URL 图片（需客户端先转为 base64）
+ */
+function convertOpenAIContentToClaude(content: any): any[] {
+  if (!content) return []
+
+  // 字符串直接转为 text 块
+  if (typeof content === 'string') {
+    return content.trim() ? [{ type: 'text', text: content.trim() }] : []
+  }
+
+  if (!Array.isArray(content)) return []
+
+  const claudeContent: any[] = []
+
+  for (const item of content) {
+    if (!item) continue
+
+    switch (item.type) {
+      case 'text':
+        if (item.text?.trim()) {
+          const textBlock: any = { type: 'text', text: item.text.trim() }
+          // 支持缓存控制
+          if (item.cache_control) {
+            textBlock.cache_control = item.cache_control
+          }
+          claudeContent.push(textBlock)
+        }
+        break
+
+      case 'image_url':
+        if (item.image_url) {
+          const imageUrl = typeof item.image_url === 'string'
+            ? item.image_url
+            : item.image_url.url
+
+          if (imageUrl?.startsWith('data:')) {
+            // Base64 格式: data:image/jpeg;base64,/9j/4AAQ...
+            const [header, data] = imageUrl.split(',')
+            const mediaType = header.match(/data:([^;]+)/)?.[1] || 'image/jpeg'
+            const imageBlock: any = {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: mediaType,
+                data: data
+              }
+            }
+            if (item.cache_control) {
+              imageBlock.cache_control = item.cache_control
+            }
+            claudeContent.push(imageBlock)
+          } else if (imageUrl) {
+            // URL 格式不支持，提示用户转为 base64
+            claudeContent.push({
+              type: 'text',
+              text: `[Error: URL images not supported. Please convert to base64 first: ${imageUrl}]`
+            })
+          }
+        }
+        break
+
+      case 'image':
+        // 已经是 Claude 格式，直接保留
+        if (item.source) {
+          claudeContent.push(item)
+        }
+        break
+
+      case 'file':
+      case 'document':
+        // 文件/文档类型（PDF、文本等）
+        if (item.file || item.source) {
+          const fileData = item.file || item.source
+
+          if (fileData.type === 'base64' || fileData.data) {
+            const mediaType = fileData.media_type || fileData.mime_type || 'application/octet-stream'
+
+            if (isImageType(mediaType)) {
+              // 图片类型
+              const imageBlock: any = {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: mediaType,
+                  data: fileData.data
+                }
+              }
+              if (item.cache_control) {
+                imageBlock.cache_control = item.cache_control
+              }
+              claudeContent.push(imageBlock)
+            } else if (isDocumentType(mediaType)) {
+              // 文档类型（PDF、文本等）
+              const docBlock: any = {
+                type: 'document',
+                source: {
+                  type: 'base64',
+                  media_type: mediaType,
+                  data: fileData.data
+                }
+              }
+              if (item.cache_control) {
+                docBlock.cache_control = item.cache_control
+              }
+              claudeContent.push(docBlock)
+            } else {
+            claudeContent.push({
+                type: 'text',
+                text: `[Unsupported file type: ${mediaType}]`
+              })
+            }
+          } else if (fileData.type === 'text' && (fileData.text || fileData.data)) {
+            // 纯文本文档
+            const docBlock: any = {
+              type: 'document',
+              source: {
+                type: 'text',
+                media_type: fileData.media_type || 'text/plain',
+                data: fileData.text || fileData.data
+              }
+            }
+            if (item.cache_control) {
+              docBlock.cache_control = item.cache_control
+            }
+   claudeContent.push(docBlock)
+          } else if (fileData.url) {
+            // URL 格式不支持
+            claudeContent.push({
+              type: 'text',
+              text: `[Error: URL files not supported. Please convert to base64 first: ${fileData.url}]`
+            })
+          }
+        }
+        break
+
+      case 'input_audio':
+        // 音频不支持
+        claudeContent.push({ type: 'text', text: '[Error: Audio input not supported]' })
+        break
+
+      default:
+        // 其他类型尝试提取 text
+        if (item.text?.trim()) {
+          claudeContent.push({ type: 'text', text: item.text.trim() })
+        }
+    }
+  }
+
+  return claudeContent
+}
+
+/**
+ * 将 Claude 格式的消息内容转换为 OpenAI 格式
+ * 支持: text, image, document, thinking, tool_use, tool_result
+ */
+function convertClaudeContentToOpenAI(content: any): any {
+  if (!content) return ''
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+
+  const openaiContent: any[] = []
+
+  for (const block of content) {
+    if (!block) continue
+
+    switch (block.type) {
+      case 'text':
+        if (block.text) {
+          openaiContent.push({ type: 'text', text: block.text })
+        }
+        break
+
+      case 'thinking':
+        // 思考内容转为 reasoning_content（部分客户端支持）
+        if (block.thinking) {
+          openaiContent.push({ type: 'text', text: `<thinking>\n${block.thinking}\n</thinking>` })
+        }
+        break
+
+      case 'image':
+        if (block.source?.type === 'base64') {
+          openaiContent.push({
+            type: 'image_url',
+            image_url: {
+              url: `data:${block.source.media_type};base64,${block.source.data}`
+            }
+          })
+        }
+        break
+
+      case 'document':
+        // 文档类型转为文件引用提示
+        if (block.source) {
+          openaiContent.push({
+            type: 'text',
+            text: `[Document: ${block.source.media_type}]`
+          })
+        }
+        break
+
+      case 'tool_use':
+        // 工具调用在 OpenAI 中是单独的字段，这里转为文本提示
+        openaiContent.push({
+          type: 'text',
+          text: `[Tool use: ${block.name}]`
+        })
+        break
+
+      case 'tool_result':
+        openaiContent.push({
+          type: 'text',
+          text: typeof block.content === 'string' ? block.content : JSON.stringify(block.content)
+        })
+        break
+
+      default:
+        if (block.text) {
+          openaiContent.push({ type: 'text', text: block.text })
+        }
+    }
+  }
+
+  // 如果只有一个文本块，返回纯字符串
+  if (openaiContent.length === 1 && openaiContent[0].type === 'text') {
+    return openaiContent[0].text
+  }
+
+  return openaiContent.length > 0 ? openaiContent : ''
+}
+
+/**
+ * 将 OpenAI 格式的请求转换为 Claude 格式
+ * 支持: 消息转换、工具调用、缓存控制、思考模式
+ */
+function convertOpenAIRequestToClaude(openaiRequest: any): any {
+  const messages = openaiRequest.messages || []
+  const claudeMessages: any[] = []
+  let systemContent: any = ''
+  let systemCacheControl: any = null
+
+  for (const message of messages) {
+    const role = message.role
+
+    // 处理系统消息
+    if (role === 'system') {
+      const text = typeof message.content === 'string'
+        ? message.content
+        : normalizeTextContent(message.content)
+      systemContent += (systemContent ? '\n' : '') + text
+      // 保留缓存控制
+      if (message.cache_control) {
+        systemCacheControl = message.cache_control
+      }
+      continue
+    }
+
+    // 处理工具结果消息
+    if (role === 'tool') {
+      const toolResult: any = {
+        type: 'tool_result',
+        tool_use_id: message.tool_call_id,
+        content: message.content
+      }
+      if (message.cache_control) {
+        toolResult.cache_control = message.cache_control
+      }
+      claudeMessages.push({
+        role: 'user',
+        content: [toolResult]
+      })
+      continue
+    }
+
+    // 处理助手的工具调用消息
+    if (role === 'assistant' && message.tool_calls?.length) {
+      const toolUseBlocks = message.tool_calls.map((tc: any) => ({
+        type: 'tool_use',
+        id: tc.id,
+        name: tc.function.name,
+        input: typeof tc.function.arguments === 'string'
+          ? JSON.parse(tc.function.arguments)
+          : tc.function.arguments
+      }))
+      claudeMessages.push({ role: 'assistant', content: toolUseBlocks })
+      continue
+    }
+
+    // 普通消息
+    const claudeRole = role === 'assistant' ? 'assistant' : 'user'
+    const claudeContent = convertOpenAIContentToClaude(message.content)
+
+    if (claudeContent.length > 0) {
+      claudeMessages.push({ role: claudeRole, content: claudeContent })
+    }
+  }
+
+  // 合并相邻相同角色的消息
+  const mergedMessages: any[] = []
+  for (const msg of claudeMessages) {
+    if (mergedMessages.length === 0) {
+      mergedMessages.push(msg)
+    } else {
+      const lastMsg = mergedMessages[mergedMessages.length - 1]
+      if (lastMsg.role === msg.role) {
+        lastMsg.content = lastMsg.content.concat(msg.content)
+      } else {
+        mergedMessages.push(msg)
+      }
+    }
+  }
+
+  const claudeRequest: any = {
+    model: openaiRequest.model,
+    messages: mergedMessages,
+    max_tokens: openaiRequest.max_tokens || 4096,
+    stream: openaiRequest.stream
+  }
+
+  // 系统消息（支持缓存控制）
+  if (systemContent) {
+    if (systemCacheControl) {
+      claudeRequest.system = [{
+        type: 'text',
+        text: systemContent,
+        cache_control: systemCacheControl
+      }]
+    } else {
+      claudeRequest.system = systemContent
+    }
+  }
+
+  if (openaiRequest.temperature !== undefined) {
+    claudeRequest.temperature = openaiRequest.temperature
+  }
+
+  if (openaiRequest.top_p !== undefined) {
+    claudeRequest.top_p = openaiRequest.top_p
+  }
+
+  // 思考模式支持
+  // OpenAI 兼容格式: thinking_budget 或 reasoning_effort
+  // Claude 格式: thinking: { type: "enabled", budget_tokens: N }
+  if (openaiRequest.thinking_budget || openaiRequest.reasoning_effort) {
+    let budgetTokens = openaiRequest.thinking_budget
+
+    // reasoning_effort 映射 (low/medium/high)
+    if (!budgetTokens && openaiRequest.reasoning_effort) {
+      const effortMapping: Record<string, number> = {
+        low: 5000,
+        medium: 10000,
+        high: 20000
+      }
+      budgetTokens = effortMapping[openaiRequest.reasoning_effort] || 10000
+    }
+
+    claudeRequest.thinking = {
+      type: 'enabled',
+      budget_tokens: budgetTokens
+    }
+  } else if (openaiRequest.thinking) {
+    // 直接传递 Claude 格式的 thinking 参数
+    claudeRequest.thinking = openaiRequest.thinking
+  }
+
+  // 转换工具定义
+  if (openaiRequest.tools?.length) {
+    claudeRequest.tools = openaiRequest.tools.map((t: any) => {
+      const tool: any = {
+        name: t.function.name,
+        description: t.function.description || '',
+        input_schema: t.function.parameters || { type: 'object', properties: {} }
+      }
+      // 工具级别的缓存控制
+      if (t.cache_control) {
+        tool.cache_control = t.cache_control
+      }
+      return tool
+    })
+
+    // 转换 tool_choice
+    if (openaiRequest.tool_choice) {
+      if (typeof openaiRequest.tool_choice === 'string') {
+        const mapping: Record<string, string> = { auto: 'auto', none: 'none', required: 'any' }
+        claudeRequest.tool_choice = { type: mapping[openaiRequest.tool_choice] || 'auto' }
+      } else if (openaiRequest.tool_choice.function) {
+        claudeRequest.tool_choice = { type: 'tool', name: openaiRequest.tool_choice.function.name }
+      }
+    }
+  }
+
+  return claudeRequest
+}
+
 function estimateTokenCount(requestBody: any): number {
   let totalChars = 0
   if (requestBody?.system) {
@@ -109,9 +549,88 @@ function buildContextWarning(tokenEstimate: number): string | null {
 }
 
 function claudeToOpenAIResponse(claudeMessage: any) {
-  const text = normalizeTextContent(claudeMessage?.content ?? [])
   const promptTokens = claudeMessage?.usage?.input_tokens ?? 0
   const completionTokens = claudeMessage?.usage?.output_tokens ?? 0
+
+  // 检查是否包含工具调用或思考内容
+  const content = claudeMessage?.content ?? []
+  const hasToolUse = Array.isArray(content) && content.some((block: any) => block?.type === 'tool_use')
+  const hasThinking = Array.isArray(content) && content.some((block: any) => block?.type === 'thinking')
+
+  const message: any = {
+    role: 'assistant',
+    content: null
+  }
+
+  if (hasToolUse) {
+    // 处理包含工具调用的响应
+    const toolCalls: any[] = []
+    let textContent = ''
+    let thinkingContent = ''
+
+    for (const block of content) {
+      if (!block) continue
+
+      if (block.type === 'text') {
+        textContent += block.text || ''
+      } else if (block.type === 'thinking') {
+        thinkingContent += block.thinking || ''
+      } else if (block.type === 'tool_use') {
+        toolCalls.push({
+          id: block.id || `call_${block.name}_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: block.name || '',
+            arguments: JSON.stringify(block.input || {})
+          }
+        })
+      }
+    }
+
+    message.content = textContent || null
+    if (thinkingContent) {
+      message.reasoning_content = thinkingContent
+    }
+    if (toolCalls.length > 0) {
+      message.tool_calls = toolCalls
+    }
+  } else if (hasThinking) {
+    // 处理包含思考内容的响应
+    let textContent = ''
+    let thinkingContent = ''
+
+    for (const block of content) {
+      if (!block) continue
+
+      if (block.type === 'text') {
+        textContent += block.text || ''
+      } else if (block.type === 'thinking') {
+        thinkingContent += block.thinking || ''
+      }
+    }
+
+    message.content = textContent || null
+    if (thinkingContent) {
+      message.reasoning_content = thinkingContent
+    }
+  } else {
+    // 处理普通响应（可能包含图片）
+    const openaiContent = convertClaudeContentToOpenAI(content)
+    message.content = openaiContent
+  }
+
+  // 映射 finish_reason
+  let finishReason = 'stop'
+  if (claudeMessage?.stop_reason === 'end_turn') {
+    finishReason = 'stop'
+  } else if (claudeMessage?.stop_reason === 'max_tokens') {
+    finishReason = 'length'
+  } else if (claudeMessage?.stop_reason === 'tool_use') {
+    finishReason = 'tool_calls'
+  } else if (claudeMessage?.stop_reason) {
+    finishReason = claudeMessage.stop_reason
+  }
+
   return {
     id: claudeMessage?.id ?? `chatcmpl_${Date.now()}`,
     object: 'chat.completion',
@@ -120,19 +639,47 @@ function claudeToOpenAIResponse(claudeMessage: any) {
     choices: [
       {
         index: 0,
-        message: {
-          role: 'assistant',
-          content: text
-        },
-        finish_reason: 'stop'
+        message,
+        finish_reason: finishReason
       }
     ],
     usage: {
       prompt_tokens: promptTokens,
       completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens
+      total_tokens: promptTokens + completionTokens,
+      prompt_tokens_details: {
+        cached_tokens: claudeMessage?.usage?.cache_read_input_tokens || 0
+      }
     }
   }
+}
+
+/**
+ * 构建 OpenAI 流式响应块
+ */
+function buildOpenAIStreamChunk(
+  id: string,
+  model: string,
+  created: number,
+  delta: Record<string, unknown>,
+  finishReason: string | null,
+  usage?: any
+) {
+  const chunk: any = {
+    id,
+    object: 'chat.completion.chunk',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        delta,
+        finish_reason: finishReason
+      }
+    ]
+  }
+  if (usage) chunk.usage = usage
+  return chunk
 }
 
 
@@ -1569,9 +2116,12 @@ export function startKiroProxyServer(options: ProxyOptions) {
         const kiroService = new KiroApiService(kiroConfig)
         const model = requestBody?.model || 'claude-opus-4-5'
 
+        // 如果是 OpenAI 格式，转换为 Claude 格式（支持多模态内容）
+        const claudeRequestBody = isOpenAI ? convertOpenAIRequestToClaude(requestBody) : requestBody
+
         if (requestBody?.stream) {
           if (isClaude) {
-            for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
+            for await (const chunk of kiroService.generateContentStream(model, claudeRequestBody)) {
               if (!streamStarted) {
                 res.writeHead(200, {
                   ...DEFAULT_HEADERS,
@@ -1598,7 +2148,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
           const created = Math.floor(Date.now() / 1000)
           let openaiId = `chatcmpl_${Date.now()}`
 
-          for await (const chunk of kiroService.generateContentStream(model, requestBody)) {
+          for await (const chunk of kiroService.generateContentStream(model, claudeRequestBody)) {
             if (!chunk) continue
             if (!streamStarted) {
               res.writeHead(200, {
@@ -1638,7 +2188,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
           return
         }
 
-        const result = await kiroService.generateContent(model, requestBody)
+        const result = await kiroService.generateContent(model, claudeRequestBody)
         if (isOpenAI) {
           const payload: any = claudeToOpenAIResponse(result)
           if (contextWarning) payload.warning = contextWarning
