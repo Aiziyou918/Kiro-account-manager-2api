@@ -404,15 +404,30 @@ function convertOpenAIRequestToClaude(openaiRequest: any): any {
 
     // 处理助手的工具调用消息
     if (role === 'assistant' && message.tool_calls?.length) {
-      const toolUseBlocks = message.tool_calls.map((tc: any) => ({
-        type: 'tool_use',
-        id: tc.id,
-        name: tc.function.name,
-        input: typeof tc.function.arguments === 'string'
-          ? JSON.parse(tc.function.arguments)
-          : tc.function.arguments
-      }))
-      claudeMessages.push({ role: 'assistant', content: toolUseBlocks })
+      const toolUseBlocks = message.tool_calls
+        .filter((tc: any) => tc?.function?.name) // 过滤无效的工具调用
+        .map((tc: any) => {
+          let input = {}
+          if (typeof tc.function.arguments === 'string') {
+            try {
+              input = JSON.parse(tc.function.arguments)
+            } catch {
+              // JSON 解析失败，使用空对象
+              input = {}
+            }
+          } else {
+            input = tc.function.arguments || {}
+          }
+          return {
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input
+          }
+        })
+      if (toolUseBlocks.length > 0) {
+        claudeMessages.push({ role: 'assistant', content: toolUseBlocks })
+      }
       continue
     }
 
@@ -495,18 +510,20 @@ function convertOpenAIRequestToClaude(openaiRequest: any): any {
 
   // 转换工具定义
   if (openaiRequest.tools?.length) {
-    claudeRequest.tools = openaiRequest.tools.map((t: any) => {
-      const tool: any = {
-        name: t.function.name,
-        description: t.function.description || '',
-        input_schema: t.function.parameters || { type: 'object', properties: {} }
-      }
-      // 工具级别的缓存控制
-      if (t.cache_control) {
-        tool.cache_control = t.cache_control
-      }
-      return tool
-    })
+    claudeRequest.tools = openaiRequest.tools
+      .filter((t: any) => t?.function?.name) // 过滤掉无效的工具定义
+      .map((t: any) => {
+        const tool: any = {
+          name: t.function.name,
+          description: t.function.description || '',
+          input_schema: t.function.parameters || { type: 'object', properties: {} }
+        }
+        // 工具级别的缓存控制
+        if (t.cache_control) {
+          tool.cache_control = t.cache_control
+        }
+        return tool
+      })
 
     // 转换 tool_choice
     if (openaiRequest.tool_choice) {
@@ -2039,6 +2056,16 @@ export function startKiroProxyServer(options: ProxyOptions) {
       return sendJson(res, 404, { error: 'Unsupported endpoint' })
     }
 
+    // 第一道防线：在选择账号之前，先进行请求转换
+    // 如果转换失败，直接返回400错误，不尝试任何账号，保护号池
+    let claudeRequestBody: any
+    try {
+      claudeRequestBody = isOpenAI ? convertOpenAIRequestToClaude(requestBody) : requestBody
+    } catch (conversionError: any) {
+      logger.warn(`[Proxy] Request conversion failed: ${conversionError.message}`)
+      return sendJson(res, 400, { error: `Request format error: ${conversionError.message}` })
+    }
+
     const accountData = await getAccountData()
     const accounts = Object.entries(accountData?.accounts ?? {})
       .map(([, account]) => account)
@@ -2116,8 +2143,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
         const kiroService = new KiroApiService(kiroConfig)
         const model = requestBody?.model || 'claude-opus-4-5'
 
-        // 如果是 OpenAI 格式，转换为 Claude 格式（支持多模态内容）
-        const claudeRequestBody = isOpenAI ? convertOpenAIRequestToClaude(requestBody) : requestBody
+        // claudeRequestBody 已在循环外预先转换，直接使用
 
         if (requestBody?.stream) {
           if (isClaude) {
@@ -2199,6 +2225,22 @@ export function startKiroProxyServer(options: ProxyOptions) {
       } catch (error: any) {
         lastError = error?.message || String(error)
         const statusCode = error?.response?.status
+
+        // 第二道防线：区分错误类型，保护号池
+        // 无 statusCode 表示本地错误（网络超时、连接失败等），不是账号问题
+        // 这种情况不应该冷却账号，直接返回错误
+        if (statusCode === undefined) {
+          logger.warn(`[Proxy] Local error (not account issue): ${lastError}`)
+          if (streamStarted || res.headersSent) {
+            if (!res.writableEnded) {
+              res.end()
+            }
+            return
+          }
+          return sendJson(res, 502, { error: lastError || 'Upstream connection failed' })
+        }
+
+        // 400：请求格式被 API 拒绝，不是账号问题，不冷却账号
         if (statusCode === 400) {
           const errPayload: any = { error: lastError || 'Bad Request' }
           if (contextWarning) {
@@ -2214,6 +2256,8 @@ export function startKiroProxyServer(options: ProxyOptions) {
           }
           return sendJson(res, 400, errPayload)
         }
+
+        // 402：额度不足，冷却至下月
         if (statusCode === 402) {
           const resetAt = getNextMonthStartMs()
           disabledUntil.set(account.id, resetAt)
@@ -2230,8 +2274,9 @@ export function startKiroProxyServer(options: ProxyOptions) {
             `[Proxy] Account ${account.email} quota exhausted, disabled until ${new Date(resetAt).toISOString()}`
           )
         } else {
+          // 其他 API 错误（401、403、429、500等）：账号问题，进入冷却期，继续尝试下一个账号
           disabledUntil.set(account.id, Date.now() + cooldownMs)
-          logger.warn(`[Proxy] Account ${account.email} failed, cooldown ${cooldownMs}ms: ${lastError}`)
+          logger.warn(`[Proxy] Account ${account.email} failed (${statusCode}), cooldown ${cooldownMs}ms: ${lastError}`)
         }
         if (streamStarted || res.headersSent) {
           if (!res.writableEnded) {
