@@ -597,6 +597,7 @@ function claudeToOpenAIResponse(claudeMessage: any) {
     const toolCalls: any[] = []
     let textContent = ''
     let thinkingContent = ''
+    let toolIndex = 0
 
     for (const block of content) {
       if (!block) continue
@@ -606,14 +607,18 @@ function claudeToOpenAIResponse(claudeMessage: any) {
       } else if (block.type === 'thinking') {
         thinkingContent += block.thinking || ''
       } else if (block.type === 'tool_use') {
+        // OpenAI 格式要求：id 必须以 "call_" 开头，且每个 tool_call 需要 index
+        const toolId = block.id?.startsWith('call_') ? block.id : `call_${block.id || `${block.name}_${Date.now()}_${toolIndex}`}`
         toolCalls.push({
-          id: block.id || `call_${block.name}_${Date.now()}`,
+          index: toolIndex,
+          id: toolId,
           type: 'function',
           function: {
             name: block.name || '',
             arguments: JSON.stringify(block.input || {})
           }
         })
+     toolIndex++
       }
     }
 
@@ -762,13 +767,17 @@ function convertClaudeStreamChunkToOpenAIChunks(
   if (claudeChunk.type === 'content_block_start') {
     const contentBlock = claudeChunk.content_block
     if (contentBlock?.type === 'tool_use') {
+      // OpenAI 格式要求：id 必须以 "call_" 开头
+      const toolId = contentBlock.id?.startsWith('call_')
+        ? contentBlock.id
+        : `call_${contentBlock.id || `${contentBlock.name}_${Date.now()}`}`
       return [
         buildChunk(
           {
             tool_calls: [
               {
                 index: claudeChunk.index || 0,
-                id: contentBlock.id,
+                id: toolId,
                 type: 'function',
                 function: {
                   name: contentBlock.name,
