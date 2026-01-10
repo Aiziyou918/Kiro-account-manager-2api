@@ -546,6 +546,9 @@ function convertOpenAIRequestToClaude(openaiRequest: any): any {
       } else if (openaiRequest.tool_choice.function) {
         claudeRequest.tool_choice = { type: 'tool', name: openaiRequest.tool_choice.function.name }
       }
+    } else {
+      // 默认设置为 auto
+      claudeRequest.tool_choice = { type: 'auto' }
     }
   }
 
@@ -597,7 +600,6 @@ function claudeToOpenAIResponse(claudeMessage: any) {
     const toolCalls: any[] = []
     let textContent = ''
     let thinkingContent = ''
-    let toolIndex = 0
 
     for (const block of content) {
       if (!block) continue
@@ -607,10 +609,9 @@ function claudeToOpenAIResponse(claudeMessage: any) {
       } else if (block.type === 'thinking') {
         thinkingContent += block.thinking || ''
       } else if (block.type === 'tool_use') {
-        // OpenAI 格式要求：id 必须以 "call_" 开头，且每个 tool_call 需要 index
-        const toolId = block.id?.startsWith('call_') ? block.id : `call_${block.id || `${block.name}_${Date.now()}_${toolIndex}`}`
+        // OpenAI 格式：id 必须以 "call_" 开头
+        const toolId = block.id?.startsWith('call_') ? block.id : `call_${block.id || `${block.name}_${Date.now()}`}`
         toolCalls.push({
-          index: toolIndex,
           id: toolId,
           type: 'function',
           function: {
@@ -618,7 +619,6 @@ function claudeToOpenAIResponse(claudeMessage: any) {
             arguments: JSON.stringify(block.input || {})
           }
         })
-     toolIndex++
       }
     }
 
