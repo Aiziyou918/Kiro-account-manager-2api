@@ -2112,19 +2112,14 @@ export function startKiroProxyServer(options: ProxyOptions) {
       return sendJson(res, 404, { error: 'Unsupported endpoint' })
     }
 
-    // 第一道防线：在选择账号之前，先进行请求转换
-    // 如果转换失败，直接返回400错误，不尝试任何账号，保护号池
-    let claudeRequestBody: any
-    try {
-      claudeRequestBody = isOpenAI ? convertOpenAIRequestToClaude(requestBody) : requestBody
-    } catch (conversionError: any) {
-      logger.warn(`[Proxy] Request conversion failed: ${conversionError.message}`)
-      return sendJson(res, 400, { error: `Request format error: ${conversionError.message}` })
-    }
+    // Kiro API 支持 OpenAI 格式，直接使用原始请求体
+    // 只对 Claude 端点进行过滤处理
+    let apiRequestBody = requestBody
 
-    // 第二道防线：过滤 Claude Code 特征，防止 Kiro 检测
-    // 简化超长的 tool descriptions，移除敏感文本
-    claudeRequestBody = sanitizeClaudeCodeTools(claudeRequestBody)
+    if (!isOpenAI) {
+      // Claude 端点：过滤 Claude Code 特征，防止 Kiro 检测
+      apiRequestBody = sanitizeClaudeCodeTools(requestBody)
+    }
 
     const accountData = await getAccountData()
     const accounts = Object.entries(accountData?.accounts ?? {})
@@ -2203,11 +2198,11 @@ export function startKiroProxyServer(options: ProxyOptions) {
         const kiroService = new KiroApiService(kiroConfig)
         const model = requestBody?.model || 'claude-opus-4-5'
 
-        // claudeRequestBody 已在循环外预先转换，直接使用
+        // apiRequestBody 已准备好，直接使用
 
         if (requestBody?.stream) {
           if (isClaude) {
-            for await (const chunk of kiroService.generateContentStream(model, claudeRequestBody)) {
+            for await (const chunk of kiroService.generateContentStream(model, apiRequestBody)) {
               if (!streamStarted) {
                 res.writeHead(200, {
                   ...DEFAULT_HEADERS,
@@ -2234,7 +2229,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
           const created = Math.floor(Date.now() / 1000)
           let openaiId = `chatcmpl_${Date.now()}`
 
-          for await (const chunk of kiroService.generateContentStream(model, claudeRequestBody)) {
+          for await (const chunk of kiroService.generateContentStream(model, apiRequestBody)) {
             if (!chunk) continue
             if (!streamStarted) {
               res.writeHead(200, {
@@ -2274,7 +2269,7 @@ export function startKiroProxyServer(options: ProxyOptions) {
           return
         }
 
-        const result = await kiroService.generateContent(model, claudeRequestBody)
+        const result = await kiroService.generateContent(model, apiRequestBody)
         if (isOpenAI) {
           const payload: any = claudeToOpenAIResponse(result)
           if (contextWarning) payload.warning = contextWarning
