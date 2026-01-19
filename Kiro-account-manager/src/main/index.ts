@@ -721,18 +721,18 @@ async function refreshUsageForAvailableAccounts(): Promise<{ updated: number; fa
 
   for (const account of targets) {
     try {
-      const { userInfo, usage, newCredentials } = await refreshUsageForAccount(account)
+      const { userInfo, usage, newCredentials } = await refreshUsageForAccount(account as any)
       const usageData = buildUsageFromResponse(usage)
       const derivedStatus = userInfo?.status
         ? userInfo.status === 'Active'
           ? 'active'
           : 'error'
-        : account.status
+        : (account as any).status
 
       const updatedAccount = {
-        ...account,
-        email: userInfo?.email || account.email,
-        userId: userInfo?.userId || account.userId,
+        ...(account as any),
+        email: userInfo?.email || (account as any).email,
+        userId: userInfo?.userId || (account as any).userId,
         status: derivedStatus,
         usage: usageData,
         lastError: ''
@@ -740,22 +740,22 @@ async function refreshUsageForAvailableAccounts(): Promise<{ updated: number; fa
 
       if (newCredentials) {
         updatedAccount.credentials = {
-          ...account.credentials,
+          ...(account as any).credentials,
           accessToken: newCredentials.accessToken,
-          refreshToken: newCredentials.refreshToken || account.credentials?.refreshToken,
-          expiresAt: newCredentials.expiresAt || account.credentials?.expiresAt
+          refreshToken: newCredentials.refreshToken || (account as any).credentials?.refreshToken,
+          expiresAt: newCredentials.expiresAt || (account as any).credentials?.expiresAt
         }
       }
 
-      data.accounts[account.id] = updatedAccount
+      data.accounts[(account as any).id] = updatedAccount
       store!.set('accountData', data)
       lastSavedData = data
       updated++
     } catch (error) {
       failed++
       const errorMsg = error instanceof Error ? error.message : String(error)
-      data.accounts[account.id] = {
-        ...account,
+      data.accounts[(account as any).id] = {
+        ...(account as any),
         lastError: errorMsg
       }
       store!.set('accountData', data)

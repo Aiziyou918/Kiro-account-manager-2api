@@ -376,6 +376,7 @@ function convertClaudeContentToOpenAI(content: any): any {
  * 将 OpenAI 格式的请求转换为 Claude 格式
  * 支持: 消息转换、工具调用、缓存控制、思考模式
  */
+// @ts-ignore - Function kept for potential future use
 function convertOpenAIRequestToClaude(openaiRequest: any): any {
   const messages = openaiRequest.messages || []
   const claudeMessages: any[] = []
@@ -572,10 +573,10 @@ function estimateTokenCount(requestBody: any): number {
 }
 
 function buildContextWarning(tokenEstimate: number): string | null {
-  if (tokenEstimate >= 24000) {
+  if (tokenEstimate >= 190000) {
     return 'Context length is very large and may exceed limits. Consider compacting or starting a new chat.'
   }
-  if (tokenEstimate >= 16000) {
+  if (tokenEstimate >= 170000) {
     return 'Context is near the limit. Consider compacting or starting a new chat soon.'
   }
   return null

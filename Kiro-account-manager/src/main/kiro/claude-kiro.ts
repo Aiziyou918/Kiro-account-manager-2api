@@ -53,7 +53,7 @@ function getSystemRuntimeInfo(): { osName: string; nodeVersion: string } {
   const osRelease = os.release()
   const nodeVersion = process.version.replace('v', '')
 
-  let osName = osPlatform
+  let osName: string = osPlatform
   if (osPlatform === 'win32') osName = `windows#${osRelease}`
   else if (osPlatform === 'darwin') osName = `macos#${osRelease}`
   else osName = `${osPlatform}#${osRelease}`
@@ -235,6 +235,8 @@ export interface KiroServiceConfig {
   disableCredentialLoad?: boolean
   disableAutoRefresh?: boolean
   useSystemProxy?: boolean
+  REQUEST_MAX_RETRIES?: number
+  REQUEST_BASE_DELAY?: number
 }
 
 export class KiroApiService {
@@ -515,7 +517,7 @@ export class KiroApiService {
     }
   }
 
-  buildCodewhispererRequest(messages: any[], model: string, tools: any[] = null, inSystemPrompt: any = null) {
+  buildCodewhispererRequest(messages: any[], model: string, tools: any[] | null = null, inSystemPrompt: any = null) {
     const conversationId = uuidv4()
     const systemPrompt = safeGetTextContent(inSystemPrompt)
     const processedMessages = messages
@@ -937,7 +939,7 @@ ${firstUserContent}`,
         data: requestData,
         headers
       })
-      return response
+      return response.data
     } catch (error: any) {
       if (error.response?.status === 403 && !isRetry) {
         console.log('[Kiro] Received 403. Attempting token refresh and retrying...')
@@ -1342,10 +1344,9 @@ ${firstUserContent}`,
       for (const toolCall of toolCalls) {
         contentArray.push({
           type: 'tool_use',
-          id: toolCall.id,
           name: toolCall.function.name,
           input: JSON.parse(toolCall.function.arguments)
-        })
+        } as any)
       }
     }
 
