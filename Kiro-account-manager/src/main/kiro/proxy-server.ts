@@ -2348,6 +2348,13 @@ export function startKiroProxyServer(options: ProxyOptions) {
     }
   })
 
+  // Windows 网络栈配置：显式设置超时和 keep-alive
+  // 这些设置对 Windows 非常关键，避免连接过早关闭
+  server.keepAliveTimeout = 75000   // 75秒，比上游 idle 超时更长
+  server.headersTimeout = 80000     // 80秒，必须大于 keepAliveTimeout
+  server.requestTimeout = 0         // 禁用请求超时，允许长请求/流式响应
+  server.timeout = 0                // 禁用 socket 超时，兼容性考虑
+
   server.listen(port, '0.0.0.0', () => {
     logger.log(`[Proxy] Kiro API proxy listening on http://0.0.0.0:${port}`)
   })

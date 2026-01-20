@@ -332,8 +332,8 @@ export class KiroApiService {
         'amz-sdk-request': 'attempt=1; max=1',
         'x-amzn-kiro-agent-mode': 'vibe',
         'x-amz-user-agent': `aws-sdk-js/1.0.0 KiroIDE-${kiroVersion}-${machineId}`,
-        'user-agent': `aws-sdk-js/1.0.0 ua/2.1 os/${osName} lang/js md/nodejs#${nodeVersion} api/codewhispererruntime#1.0.0 m/E KiroIDE-${kiroVersion}-${machineId}`,
-        Connection: 'close'
+        'user-agent': `aws-sdk-js/1.0.0 ua/2.1 os/${osName} lang/js md/nodejs#${nodeVersion} api/codewhispererruntime#1.0.0 m/E KiroIDE-${kiroVersion}-${machineId}`
+        // 移除 Connection: 'close' - 让 keepAlive agent 正常工作
       }
     }
 
@@ -1456,8 +1456,8 @@ ${firstUserContent}`,
       'x-amz-user-agent': `aws-sdk-js/1.0.0 KiroIDE-${kiroVersion}-${machineId}`,
       'user-agent': `aws-sdk-js/1.0.0 ua/2.1 os/${osName} lang/js md/nodejs#${nodeVersion} api/codewhispererruntime#1.0.0 m/E KiroIDE-${kiroVersion}-${machineId}`,
       'amz-sdk-invocation-id': uuidv4(),
-      'amz-sdk-request': 'attempt=1; max=1',
-      Connection: 'close'
+      'amz-sdk-request': 'attempt=1; max=1'
+      // 移除 Connection: 'close' - 让 keepAlive agent 正常工作
     }
 
     try {
